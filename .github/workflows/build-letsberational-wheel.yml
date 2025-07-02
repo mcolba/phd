@@ -1,4 +1,4 @@
-name: Build letsberational Windows Wheel
+name: Build LetsBeRational Windows Wheel
 
 on:
   push:
@@ -28,7 +28,7 @@ jobs:
 
       - name: Build Windows wheel
         run: |
-          cd cpp/third_party/jaekel
+          cd  ${{ github.workspace }}/cpp/third_party/jaekel
           cibuildwheel --platform windows --output-dir wheelhouse
 
       - name: Upload wheel artifact
