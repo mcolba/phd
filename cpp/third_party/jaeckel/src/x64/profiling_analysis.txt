@@ -1,0 +1,384 @@
+
+letsberational_profiling.exe	2097152	0 1e-14 1e-08 0.0001 0.001 0.01 0.05 0.1 0.25 0.5 1 2 4 8 16 32 64 128 256 512
+
+Loaded letsberational_profiling.exe revision 1517 [64 bit RELEASE running on 12th Gen Intel(R) Core(TM) i5-12500H] compiled with MinGW-w64 10.0 (GCC 12.2.0) on Feb  9 2024 13:18:54 from ./x64 .
+
+Average over 20 different values for x:  0.447392  microseconds per evaluation (41943040 successful evaluations in total).
+
+Total average |(attained accuracy)/(theoretically attainable accuracy)| : 0.20433.
+This means the method is on average 4.9 times more accurate than what one could
+hope for on the basis of first order error propagation analysis.
+
+Flat profile:
+
+Each sample counts as 0.01 seconds.
+  %   cumulative   self              self     total           
+ time   seconds   seconds    calls  ns/call  ns/call  name    
+ 40.24      9.77     9.77                             exp
+ 12.11     12.71     2.94                             __logl_internal
+  9.80     15.09     2.38 62914581    37.83    86.56  lets_be_rational
+  5.07     16.32     1.23                             _mcount_private
+  5.02     17.54     1.22 103783688    11.76    11.76  asymptotic_expansion_of_scaled_normalised_black(double, double)
+  3.62     18.42     0.88                             log
+  3.21     19.20     0.78                             __fentry__
+  3.01     19.93     0.73                             cbrt
+  2.92     20.64     0.71 103148745     6.88     6.88  erfc_cody(double)
+  2.84     21.33     0.69 159475020     4.33     4.33  erfcx_cody_above_threshold(double)
+  1.98     21.81     0.48 57781196     8.31     8.31  inverse_norm_cdf_for_low_probabilities(double)
+  1.85     22.26     0.45                             ldexp
+  1.28     22.57     0.31                             main
+  1.19     22.86     0.29 62914581     4.61    91.17  ImpliedBlackVolatility
+  0.91     23.08     0.22 119109776     1.85    14.53  scaled_normalised_black_and_ln_vega(double, double)
+  0.91     23.30     0.22 49721098     4.42    16.23  normalised_black_with_optimal_use_of_codys_functions(double, double)
+  0.66     23.46     0.16 39845872     4.02     4.02  convex_rational_cubic_control_parameter_to_fit_second_derivative_at_right_side(double, double, double, double, double, double, double, bool)
+  0.62     23.61     0.15 58867631     2.55     2.55  rational_cubic_interpolation(double, double, double, double, double, double, double, double)
+  0.49     23.73     0.12 160344260     0.75     5.05  erfcx_cody(double)
+  0.45     23.84     0.11 41943040     2.62    16.75  BlackAccuracyFactor
+  0.41     23.94     0.10 41943040     2.38    17.44  Black
+  0.37     24.03     0.09 11110528     8.10    12.10  small_t_expansion_of_scaled_normalised_black(double, double)
+  0.29     24.10     0.07 19021759     3.68     3.68  convex_rational_cubic_control_parameter_to_fit_second_derivative_at_left_side(double, double, double, double, double, double, double, bool)
+  0.16     24.14     0.04 45505538     0.88    15.19  normalised_black(double, double)
+  0.16     24.18     0.04 11110528     3.60     4.00  Yprime(double)
+  0.16     24.22     0.04  3173166    12.61    12.61  erf_cody(double)
+  0.08     24.24     0.02 56938067     0.35     0.35  inverse_norm_cdf
+  0.08     24.26     0.02  3145729     6.36     8.79  implied_normalised_volatility_atm(double)
+  0.08     24.28     0.02                             frexp
+  0.00     24.28     0.00       65     0.00     0.00  printf(char const*, ...)
+  0.00     24.28     0.00       20     0.00    15.06  NormalisedBlack
+  0.00     24.28     0.00        6     0.00     0.00  XLOper::isUndefined() const
+  0.00     24.28     0.00        4     0.00     0.00  NormalisedImpliedBlackVolatilityForExcel
+  0.00     24.28     0.00        1     0.00     0.00  Bitness
+  0.00     24.28     0.00        1     0.00     0.00  BuildConfiguration
+  0.00     24.28     0.00        1     0.00     0.00  BuildDate
+  0.00     24.28     0.00        1     0.00     0.00  CPUName
+  0.00     24.28     0.00        1     0.00     0.00  CompilerVersion
+  0.00     24.28     0.00        1     0.00     0.00  DLLDirectory
+  0.00     24.28     0.00        1     0.00     0.00  DLLName
+  0.00     24.28     0.00        1     0.00     0.00  Revision
+
+ %         the percentage of the total running time of the
+time       program used by this function.
+
+cumulative a running sum of the number of seconds accounted
+ seconds   for by this function and those listed above it.
+
+ self      the number of seconds accounted for by this
+seconds    function alone.  This is the major sort for this
+           listing.
+
+calls      the number of times this function was invoked, if
+           this function is profiled, else blank.
+
+ self      the average number of milliseconds spent in this
+ms/call    function per call, if this function is profiled,
+	   else blank.
+
+ total     the average number of milliseconds spent in this
+ms/call    function and its descendents per call, if this
+	   function is profiled, else blank.
+
+name       the name of the function.  This is the minor sort
+           for this listing. The index shows the location of
+	   the function in the gprof listing. If the index is
+	   in parenthesis it shows where it would appear in
+	   the gprof listing if it were to be printed.
+
+Copyright (C) 2012-2022 Free Software Foundation, Inc.
+
+Copying and distribution of this file, with or without modification,
+are permitted in any medium without royalty provided the copyright
+notice and this notice are preserved.
+
+		     Call graph (explanation follows)
+
+
+granularity: each sample hit covers 4 byte(s) for 0.04% of 24.28 seconds
+
+index % time    self  children    called     name
+                                                 <spontaneous>
+[1]     40.2    9.77    0.00                 exp [1]
+-----------------------------------------------
+                                                 <spontaneous>
+[2]     30.8    0.31    7.17                 main [2]
+                0.29    5.45 62914581/62914581     ImpliedBlackVolatility [3]
+                0.10    0.63 41943040/41943040     Black [13]
+                0.11    0.59 41943040/41943040     BlackAccuracyFactor [16]
+                0.00    0.00      20/20          NormalisedBlack [30]
+                0.00    0.00      65/65          printf(char const*, ...) [262]
+                0.00    0.00       6/6           XLOper::isUndefined() const [263]
+                0.00    0.00       1/1           DLLDirectory [37]
+                0.00    0.00       1/1           BuildDate [34]
+                0.00    0.00       1/1           CompilerVersion [36]
+                0.00    0.00       1/1           CPUName [35]
+                0.00    0.00       1/1           BuildConfiguration [33]
+                0.00    0.00       1/1           Bitness [32]
+                0.00    0.00       1/1           Revision [39]
+                0.00    0.00       1/1           DLLName [38]
+-----------------------------------------------
+                0.29    5.45 62914581/62914581     main [2]
+[3]     23.6    0.29    5.45 62914581         ImpliedBlackVolatility [3]
+                2.38    3.07 62914581/62914581     lets_be_rational [4]
+-----------------------------------------------
+                2.38    3.07 62914581/62914581     ImpliedBlackVolatility [3]
+[4]     22.4    2.38    3.07 62914581         lets_be_rational [4]
+                0.15    1.01 79263888/119109776     scaled_normalised_black_and_ln_vega(double, double) [6]
+                0.08    0.46 106243502/160344260     erfcx_cody(double) [10]
+                0.47    0.00 56860345/57781196     inverse_norm_cdf_for_low_probabilities(double) [19]
+                0.39    0.00 56938067/103148745     erfc_cody(double) [15]
+                0.16    0.00 39845872/39845872     convex_rational_cubic_control_parameter_to_fit_second_derivative_at_right_side(double, double, double, double, double, double, double, bool) [21]
+                0.15    0.00 58867631/58867631     rational_cubic_interpolation(double, double, double, double, double, double, double, double) [22]
+                0.00    0.08 5659631/45505538     normalised_black(double, double) [17]
+                0.07    0.00 19021759/19021759     convex_rational_cubic_control_parameter_to_fit_second_derivative_at_left_side(double, double, double, double, double, double, double, bool) [24]
+                0.02    0.01 3145729/3145729     implied_normalised_volatility_atm(double) [27]
+                0.02    0.00 56938067/56938067     inverse_norm_cdf [28]
+-----------------------------------------------
+                                                 <spontaneous>
+[5]     12.1    2.94    0.00                 __logl_internal [5]
+-----------------------------------------------
+                0.07    0.51 39845888/119109776     BlackAccuracyFactor [16]
+                0.15    1.01 79263888/119109776     lets_be_rational [4]
+[6]      7.1    0.22    1.51 119109776         scaled_normalised_black_and_ln_vega(double, double) [6]
+                1.02    0.00 86513612/103783688     asymptotic_expansion_of_scaled_normalised_black(double, double) [8]
+                0.11    0.28 23940130/49721098     normalised_black_with_optimal_use_of_codys_functions(double, double) [11]
+                0.07    0.03 8656034/11110528     small_t_expansion_of_scaled_normalised_black(double, double) [23]
+-----------------------------------------------
+                                                 <spontaneous>
+[7]      5.1    1.23    0.00                 _mcount_private [7]
+-----------------------------------------------
+                0.20    0.00 17270076/103783688     normalised_black(double, double) [17]
+                1.02    0.00 86513612/103783688     scaled_normalised_black_and_ln_vega(double, double) [6]
+[8]      5.0    1.22    0.00 103783688         asymptotic_expansion_of_scaled_normalised_black(double, double) [8]
+-----------------------------------------------
+                                                 <spontaneous>
+[9]      3.6    0.88    0.00                 log [9]
+-----------------------------------------------
+                0.00    0.00  869240/160344260     Yprime(double) [25]
+                0.04    0.23 53231518/160344260     normalised_black_with_optimal_use_of_codys_functions(double, double) [11]
+                0.08    0.46 106243502/160344260     lets_be_rational [4]
+[10]     3.3    0.12    0.69 160344260         erfcx_cody(double) [10]
+                0.69    0.00 159475020/159475020     erfcx_cody_above_threshold(double) [18]
+-----------------------------------------------
+                0.11    0.28 23940130/49721098     scaled_normalised_black_and_ln_vega(double, double) [6]
+                0.11    0.30 25780968/49721098     normalised_black(double, double) [17]
+[11]     3.3    0.22    0.59 49721098         normalised_black_with_optimal_use_of_codys_functions(double, double) [11]
+                0.32    0.00 46210678/103148745     erfc_cody(double) [15]
+                0.04    0.23 53231518/160344260     erfcx_cody(double) [10]
+-----------------------------------------------
+                                                 <spontaneous>
+[12]     3.2    0.78    0.00                 __fentry__ [12]
+-----------------------------------------------
+                0.10    0.63 41943040/41943040     main [2]
+[13]     3.0    0.10    0.63 41943040         Black [13]
+                0.04    0.57 39845888/45505538     normalised_black(double, double) [17]
+                0.03    0.00 2097152/3173166     erf_cody(double) [26]
+-----------------------------------------------
+                                                 <spontaneous>
+[14]     3.0    0.73    0.00                 cbrt [14]
+-----------------------------------------------
+                0.32    0.00 46210678/103148745     normalised_black_with_optimal_use_of_codys_functions(double, double) [11]
+                0.39    0.00 56938067/103148745     lets_be_rational [4]
+[15]     2.9    0.71    0.00 103148745         erfc_cody(double) [15]
+-----------------------------------------------
+                0.11    0.59 41943040/41943040     main [2]
+[16]     2.9    0.11    0.59 41943040         BlackAccuracyFactor [16]
+                0.07    0.51 39845888/119109776     scaled_normalised_black_and_ln_vega(double, double) [6]
+                0.01    0.00 1076013/3173166     erf_cody(double) [26]
+-----------------------------------------------
+                0.00    0.00      19/45505538     NormalisedBlack [30]
+                0.00    0.08 5659631/45505538     lets_be_rational [4]
+                0.04    0.57 39845888/45505538     Black [13]
+[17]     2.8    0.04    0.65 45505538         normalised_black(double, double) [17]
+                0.11    0.30 25780968/49721098     normalised_black_with_optimal_use_of_codys_functions(double, double) [11]
+                0.20    0.00 17270076/103783688     asymptotic_expansion_of_scaled_normalised_black(double, double) [8]
+                0.02    0.01 2454494/11110528     small_t_expansion_of_scaled_normalised_black(double, double) [23]
+-----------------------------------------------
+                0.69    0.00 159475020/159475020     erfcx_cody(double) [10]
+[18]     2.8    0.69    0.00 159475020         erfcx_cody_above_threshold(double) [18]
+-----------------------------------------------
+                0.01    0.00  920851/57781196     implied_normalised_volatility_atm(double) [27]
+                0.47    0.00 56860345/57781196     lets_be_rational [4]
+[19]     2.0    0.48    0.00 57781196         inverse_norm_cdf_for_low_probabilities(double) [19]
+-----------------------------------------------
+                                                 <spontaneous>
+[20]     1.9    0.45    0.00                 ldexp [20]
+-----------------------------------------------
+                0.16    0.00 39845872/39845872     lets_be_rational [4]
+[21]     0.7    0.16    0.00 39845872         convex_rational_cubic_control_parameter_to_fit_second_derivative_at_right_side(double, double, double, double, double, double, double, bool) [21]
+-----------------------------------------------
+                0.15    0.00 58867631/58867631     lets_be_rational [4]
+[22]     0.6    0.15    0.00 58867631         rational_cubic_interpolation(double, double, double, double, double, double, double, double) [22]
+-----------------------------------------------
+                0.02    0.01 2454494/11110528     normalised_black(double, double) [17]
+                0.07    0.03 8656034/11110528     scaled_normalised_black_and_ln_vega(double, double) [6]
+[23]     0.6    0.09    0.04 11110528         small_t_expansion_of_scaled_normalised_black(double, double) [23]
+                0.04    0.00 11110528/11110528     Yprime(double) [25]
+-----------------------------------------------
+                0.07    0.00 19021759/19021759     lets_be_rational [4]
+[24]     0.3    0.07    0.00 19021759         convex_rational_cubic_control_parameter_to_fit_second_derivative_at_left_side(double, double, double, double, double, double, double, bool) [24]
+-----------------------------------------------
+                0.04    0.00 11110528/11110528     small_t_expansion_of_scaled_normalised_black(double, double) [23]
+[25]     0.2    0.04    0.00 11110528         Yprime(double) [25]
+                0.00    0.00  869240/160344260     erfcx_cody(double) [10]
+-----------------------------------------------
+                0.00    0.00       1/3173166     NormalisedBlack [30]
+                0.01    0.00 1076013/3173166     BlackAccuracyFactor [16]
+                0.03    0.00 2097152/3173166     Black [13]
+[26]     0.2    0.04    0.00 3173166         erf_cody(double) [26]
+-----------------------------------------------
+                0.02    0.01 3145729/3145729     lets_be_rational [4]
+[27]     0.1    0.02    0.01 3145729         implied_normalised_volatility_atm(double) [27]
+                0.01    0.00  920851/57781196     inverse_norm_cdf_for_low_probabilities(double) [19]
+-----------------------------------------------
+                0.02    0.00 56938067/56938067     lets_be_rational [4]
+[28]     0.1    0.02    0.00 56938067         inverse_norm_cdf [28]
+-----------------------------------------------
+                                                 <spontaneous>
+[29]     0.1    0.02    0.00                 frexp [29]
+-----------------------------------------------
+                0.00    0.00      20/20          main [2]
+[30]     0.0    0.00    0.00      20         NormalisedBlack [30]
+                0.00    0.00      19/45505538     normalised_black(double, double) [17]
+                0.00    0.00       1/3173166     erf_cody(double) [26]
+-----------------------------------------------
+                0.00    0.00       1/4           (anonymous namespace)::this_file_name() [341]
+                0.00    0.00       1/4           DLLName [38]
+                0.00    0.00       2/4           DLLDirectory [37]
+[31]     0.0    0.00    0.00       4         NormalisedImpliedBlackVolatilityForExcel [31]
+-----------------------------------------------
+                0.00    0.00       1/1           main [2]
+[32]     0.0    0.00    0.00       1         Bitness [32]
+-----------------------------------------------
+                0.00    0.00       1/1           main [2]
+[33]     0.0    0.00    0.00       1         BuildConfiguration [33]
+-----------------------------------------------
+                0.00    0.00       1/1           main [2]
+[34]     0.0    0.00    0.00       1         BuildDate [34]
+-----------------------------------------------
+                0.00    0.00       1/1           main [2]
+[35]     0.0    0.00    0.00       1         CPUName [35]
+-----------------------------------------------
+                0.00    0.00       1/1           main [2]
+[36]     0.0    0.00    0.00       1         CompilerVersion [36]
+-----------------------------------------------
+                0.00    0.00       1/1           main [2]
+[37]     0.0    0.00    0.00       1         DLLDirectory [37]
+                0.00    0.00       2/4           NormalisedImpliedBlackVolatilityForExcel [31]
+-----------------------------------------------
+                0.00    0.00       1/1           main [2]
+[38]     0.0    0.00    0.00       1         DLLName [38]
+                0.00    0.00       1/4           NormalisedImpliedBlackVolatilityForExcel [31]
+-----------------------------------------------
+                0.00    0.00       1/1           main [2]
+[39]     0.0    0.00    0.00       1         Revision [39]
+-----------------------------------------------
+                0.00    0.00      65/65          main [2]
+[262]    0.0    0.00    0.00      65         printf(char const*, ...) [262]
+-----------------------------------------------
+                0.00    0.00       6/6           main [2]
+[263]    0.0    0.00    0.00       6         XLOper::isUndefined() const [263]
+-----------------------------------------------
+
+ This table describes the call tree of the program, and was sorted by
+ the total amount of time spent in each function and its children.
+
+ Each entry in this table consists of several lines.  The line with the
+ index number at the left hand margin lists the current function.
+ The lines above it list the functions that called this function,
+ and the lines below it list the functions this one called.
+ This line lists:
+     index	A unique number given to each element of the table.
+		Index numbers are sorted numerically.
+		The index number is printed next to every function name so
+		it is easier to look up where the function is in the table.
+
+     % time	This is the percentage of the `total' time that was spent
+		in this function and its children.  Note that due to
+		different viewpoints, functions excluded by options, etc,
+		these numbers will NOT add up to 100%.
+
+     self	This is the total amount of time spent in this function.
+
+     children	This is the total amount of time propagated into this
+		function by its children.
+
+     called	This is the number of times the function was called.
+		If the function called itself recursively, the number
+		only includes non-recursive calls, and is followed by
+		a `+' and the number of recursive calls.
+
+     name	The name of the current function.  The index number is
+		printed after it.  If the function is a member of a
+		cycle, the cycle number is printed between the
+		function's name and the index number.
+
+
+ For the function's parents, the fields have the following meanings:
+
+     self	This is the amount of time that was propagated directly
+		from the function into this parent.
+
+     children	This is the amount of time that was propagated from
+		the function's children into this parent.
+
+     called	This is the number of times this parent called the
+		function `/' the total number of times the function
+		was called.  Recursive calls to the function are not
+		included in the number after the `/'.
+
+     name	This is the name of the parent.  The parent's index
+		number is printed after it.  If the parent is a
+		member of a cycle, the cycle number is printed between
+		the name and the index number.
+
+ If the parents of the function cannot be determined, the word
+ `<spontaneous>' is printed in the `name' field, and all the other
+ fields are blank.
+
+ For the function's children, the fields have the following meanings:
+
+     self	This is the amount of time that was propagated directly
+		from the child into the function.
+
+     children	This is the amount of time that was propagated from the
+		child's children to the function.
+
+     called	This is the number of times the function called
+		this child `/' the total number of times the child
+		was called.  Recursive calls by the child are not
+		listed in the number after the `/'.
+
+     name	This is the name of the child.  The child's index
+		number is printed after it.  If the child is a
+		member of a cycle, the cycle number is printed
+		between the name and the index number.
+
+ If there are any cycles (circles) in the call graph, there is an
+ entry for the cycle-as-a-whole.  This entry shows who called the
+ cycle (as parents) and the members of the cycle (as children.)
+ The `+' recursive calls entry shows the number of function calls that
+ were internal to the cycle, and the calls entry for each member shows,
+ for that member, how many times it was called from other members of
+ the cycle.
+
+Copyright (C) 2012-2022 Free Software Foundation, Inc.
+
+Copying and distribution of this file, with or without modification,
+are permitted in any medium without royalty provided the copyright
+notice and this notice are preserved.
+
+Index by function name
+
+  [32] Bitness                [17] normalised_black(double, double) [15] erfc_cody(double)
+  [13] Black                  [18] erfcx_cody_above_threshold(double) [263] XLOper::isUndefined() const
+  [16] BlackAccuracyFactor    [22] rational_cubic_interpolation(double, double, double, double, double, double, double, double) [12] __fentry__
+  [33] BuildConfiguration     [27] implied_normalised_volatility_atm(double) [5] __logl_internal
+  [34] BuildDate               [6] scaled_normalised_black_and_ln_vega(double, double) [7] _mcount_private
+  [35] CPUName                [19] inverse_norm_cdf_for_low_probabilities(double) [14] cbrt
+  [36] CompilerVersion        [23] small_t_expansion_of_scaled_normalised_black(double, double) [1] exp
+  [37] DLLDirectory            [8] asymptotic_expansion_of_scaled_normalised_black(double, double) [29] frexp
+  [38] DLLName                [11] normalised_black_with_optimal_use_of_codys_functions(double, double) [28] inverse_norm_cdf
+   [3] ImpliedBlackVolatility [25] Yprime(double)         [20] ldexp
+  [30] NormalisedBlack       [262] printf(char const*, ...) [4] lets_be_rational
+  [31] NormalisedImpliedBlackVolatilityForExcel [24] convex_rational_cubic_control_parameter_to_fit_second_derivative_at_left_side(double, double, double, double, double, double, double, bool) [9] log
+  [39] Revision               [21] convex_rational_cubic_control_parameter_to_fit_second_derivative_at_right_side(double, double, double, double, double, double, double, bool) [2] main
+  [10] erfcx_cody(double)     [26] erf_cody(double)

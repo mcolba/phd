@@ -1,0 +1,64 @@
+make[1]: Entering directory './Implementation/LetsBeRational'
+cd ./x64; "C:/Program Files/Python/Python311/python.exe" -c 'from letsberational import *; sigma=ImpliedBlackVolatility(Black(1,1,1,1,1),1,1,1,1); print("\tImpliedBlackVolatility(Black(1,1,1,1,1),1,1,1,1) = %g\n" % sigma)'
+
+Loaded dynamic load library LetsBeRational.xll revision 1517 [64 bit RELEASE running on 12th Gen Intel(R) Core(TM) i5-12500H] compiled with MSVC 1938 on Fri Feb  9 12:35:58 2024 from ./x64 .
+
+	ImpliedBlackVolatility(Black(1,1,1,1,1),1,1,1,1) = 1
+
+"C:/Program Files/Python/Python311/python.exe" -m pip install pip build wheel setuptools --upgrade --quiet --no-warn-script-location
+cd ./x64; rm -rf *.whl wheel_name; REVISION=1517 MODULE_NAME=letsberational WHEEL_MAIN_BINARY=_letsberational.pyd WHEEL_DEPENDENCY_BINARIES=LetsBeRational.xll WHEEL_OPTIONAL_BINARIES="libwinpthread-1.dll" "C:/Program Files/Python/Python311/python.exe" ../setup.py bdist_wheel --dist-dir .; echo *.whl > wheel_name;
+Building wheel for letsberational revision 1517.
+running bdist_wheel
+running build
+running build_py
+creating build
+creating build\lib.win-amd64-cpython-311
+copying letsberational.py -> build\lib.win-amd64-cpython-311
+running build_ext
+copying _letsberational.pyd -> build\lib.win-amd64-cpython-311\_letsberational.cp311-win_amd64.pyd
+copying LetsBeRational.xll -> build\lib.win-amd64-cpython-311
+copying libwinpthread-1.dll -> build\lib.win-amd64-cpython-311
+installing to build\bdist.win-amd64\wheel
+running install
+running install_lib
+creating build\bdist.win-amd64
+creating build\bdist.win-amd64\wheel
+copying build\lib.win-amd64-cpython-311\letsberational.py -> build\bdist.win-amd64\wheel\.
+copying build\lib.win-amd64-cpython-311\LetsBeRational.xll -> build\bdist.win-amd64\wheel\.
+copying build\lib.win-amd64-cpython-311\libwinpthread-1.dll -> build\bdist.win-amd64\wheel\.
+copying build\lib.win-amd64-cpython-311\_letsberational.cp311-win_amd64.pyd -> build\bdist.win-amd64\wheel\.
+running install_egg_info
+running egg_info
+creating letsberational.egg-info
+writing letsberational.egg-info\PKG-INFO
+writing dependency_links to letsberational.egg-info\dependency_links.txt
+writing top-level names to letsberational.egg-info\top_level.txt
+writing manifest file 'letsberational.egg-info\SOURCES.txt'
+reading manifest file 'letsberational.egg-info\SOURCES.txt'
+writing manifest file 'letsberational.egg-info\SOURCES.txt'
+Copying letsberational.egg-info to build\bdist.win-amd64\wheel\.\letsberational-1.0.1517-py3.11.egg-info
+running install_scripts
+creating build\bdist.win-amd64\wheel\letsberational-1.0.1517.dist-info\WHEEL
+creating '.\letsberational-1.0.1517-cp311-cp311-win_amd64.whl' and adding 'build\bdist.win-amd64\wheel' to it
+adding 'LetsBeRational.xll'
+adding '_letsberational.cp311-win_amd64.pyd'
+adding 'letsberational.py'
+adding 'libwinpthread-1.dll'
+adding 'letsberational-1.0.1517.dist-info/METADATA'
+adding 'letsberational-1.0.1517.dist-info/WHEEL'
+adding 'letsberational-1.0.1517.dist-info/top_level.txt'
+adding 'letsberational-1.0.1517.dist-info/RECORD'
+removing build\bdist.win-amd64\wheel
+Generated wheel file ./x64/letsberational-1.0.1517-cp311-cp311-win_amd64.whl.
+cd ./x64; "C:/Program Files/Python/Python311/python.exe" -m pip install --force-reinstall `cat wheel_name` --quiet --no-warn-script-location
+d=`mktemp -d --tmpdir`;	make PYTHON_TEST_RUN_DIR=$d python_test; rm -rf $d
+make[2]: Entering directory './Implementation/LetsBeRational'
+cd /tmp/tmp.LjdRqZgoWa; "C:/Program Files/Python/Python311/python.exe" -c 'from letsberational import *; sigma=ImpliedBlackVolatility(Black(1,1,1,1,1),1,1,1,1); print("\tImpliedBlackVolatility(Black(1,1,1,1,1),1,1,1,1) = %g\n" % sigma)'
+
+Loaded dynamic load library LetsBeRational.xll revision 1517 [64 bit RELEASE running on 12th Gen Intel(R) Core(TM) i5-12500H] compiled with MSVC 1938 on Fri Feb  9 12:35:58 2024 from ~/AppData\Roaming\Python\Python311\site-packages .
+
+	ImpliedBlackVolatility(Black(1,1,1,1,1),1,1,1,1) = 1
+
+make[2]: Leaving directory './Implementation/LetsBeRational'
+"C:/Program Files/Python/Python311/python.exe" -m pip uninstall letsberational -y --quiet
+make[1]: Leaving directory './Implementation/LetsBeRational'

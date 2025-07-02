@@ -1,0 +1,92 @@
+
+letsberational_profiling.exe	2097152	0 1e-14 1e-08 0.0001 0.001 0.01 0.05 0.1 0.25 0.5 1 2 4 8 16 32 64 128 256 512
+
+Loaded letsberational_profiling.exe revision 1517 [64 bit RELEASE running on 12th Gen Intel(R) Core(TM) i5-12500H] compiled with MinGW-w64 10.0 (GCC 12.2.0) on Feb  9 2024 13:18:54 from ./x64 .
+
+#
+# |x|=0	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=5.9447e-09	beta_max=1+2.22045E-16	s_min=1.11549e-307	s_mid=1.49012e-08	s_max=16.4191
+#
+# Total implied volatility evaluations: 2097152	Average time: 0.0677109 microseconds	Average volatility [2097152]: 4.1048	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.311556
+#
+# |x|=1e-14	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=5.6419e-08	beta_max=1-5.44009E-15	s_min=2.74241e-16	s_mid=1.41421e-07	s_max=16.4191
+#
+# Total implied volatility evaluations: 2097152	Average time: 0.458241 microseconds	Average volatility [2097152]: 4.10487	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.199875
+#
+# |x|=1e-08	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=5.6414e-05	beta_max=1-5E-09	s_min=2.71654e-10	s_mid=0.000141421	s_max=16.4191
+#
+# Total implied volatility evaluations: 2097152	Average time: 0.464916 microseconds	Average volatility [2097152]: 4.10491	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.176288
+#
+# |x|=0.0001	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.00559199	beta_max=0.99995	s_min=2.6983e-06	s_mid=0.0141421	s_max=16.4191
+#
+# Total implied volatility evaluations: 2097152	Average time: 0.464916 microseconds	Average volatility [2097152]: 4.10842	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.180496
+#
+# |x|=0.001	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.0173442	beta_max=0.9995	s_min=2.6938e-05	s_mid=0.0447214	s_max=16.5847
+#
+# Total implied volatility evaluations: 2097152	Average time: 0.465393 microseconds	Average volatility [2097152]: 4.15711	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.184291
+#
+# |x|=0.01	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.0515133	beta_max=0.995012	s_min=0.000268932	s_mid=0.141421	s_max=16.4191
+#
+# Total implied volatility evaluations: 2097152	Average time: 0.473022 microseconds	Average volatility [2097152]: 4.14062	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.165179
+#
+# |x|=0.05	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.102224	beta_max=0.97531	s_min=0.0013431	s_mid=0.316228	s_max=16.4191
+#
+# Total implied volatility evaluations: 2097152	Average time: 0.46587 microseconds	Average volatility [2097152]: 4.18558	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.179675
+#
+# |x|=0.1	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.13147	beta_max=0.951229	s_min=0.00268486	s_mid=0.447214	s_max=16.4191
+#
+# Total implied volatility evaluations: 2097152	Average time: 0.465393 microseconds	Average volatility [2097152]: 4.21981	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.180655
+#
+# |x|=0.25	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.169576	beta_max=0.882497	s_min=0.00670774	s_mid=0.707107	s_max=16.419
+#
+# Total implied volatility evaluations: 2097152	Average time: 0.488281 microseconds	Average volatility [2097152]: 4.28906	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.188376
+#
+# |x|=0.5	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.185683	beta_max=0.778801	s_min=0.0134088	s_mid=1	s_max=16.419
+#
+# Total implied volatility evaluations: 2097152	Average time: 0.524998 microseconds	Average volatility [2097152]: 4.36918	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.1915
+#
+# |x|=1	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.173594	beta_max=0.606531	s_min=0.0268043	s_mid=1.41421	s_max=16.5843
+#
+# Total implied volatility evaluations: 2097152	Average time: 0.510693 microseconds	Average volatility [2097152]: 4.52798	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.204405
+#
+# |x|=2	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.122098	beta_max=0.367879	s_min=0.0535819	s_mid=2	s_max=16.7471
+#
+# Total implied volatility evaluations: 2097152	Average time: 0.495434 microseconds	Average volatility [2097152]: 4.74136	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.187558
+#
+# |x|=4	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.0503856	beta_max=0.135335	s_min=0.107111	s_mid=2.82843	s_max=16.9049
+#
+# Total implied volatility evaluations: 2097152	Average time: 0.449657 microseconds	Average volatility [2097152]: 5.03968	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.206499
+#
+# |x|=8	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.00742863	beta_max=0.0183156	s_min=0.214116	s_mid=4	s_max=17.3664
+#
+# Total implied volatility evaluations: 2097152	Average time: 0.450134 microseconds	Average volatility [2097152]: 5.54777	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.195764
+#
+# |x|=16	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.000144752	beta_max=0.000335463	s_min=0.428025	s_mid=5.65685	s_max=18.2291
+#
+# Total implied volatility evaluations: 2097152	Average time: 0.458717 microseconds	Average volatility [2097152]: 6.3693	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.194939
+#
+# |x|=32	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=5.07396e-08	beta_max=1.12535E-07	s_min=0.855669	s_mid=8	s_max=19.6294
+#
+# Total implied volatility evaluations: 2097152	Average time: 0.435352 microseconds	Average volatility [2097152]: 7.66943	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.186847
+#
+# |x|=64	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=5.88893e-15	beta_max=1.26642E-14	s_min=1.71083	s_mid=11.3137	s_max=22.1223
+#
+# Total implied volatility evaluations: 2097152	Average time: 0.442982 microseconds	Average volatility [2097152]: 9.80499	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.204659
+#
+# |x|=128	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=7.62071e-29	beta_max=1.60381E-28	s_min=3.42264	s_mid=16	s_max=26.097
+#
+# Total implied volatility evaluations: 2097152	Average time: 0.457764 microseconds	Average volatility [2097152]: 13.2336	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.217441
+#
+# |x|=256	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=1.24084e-56	beta_max=2.57221E-56	s_min=6.86354	s_mid=22.6274	s_max=32.2536
+#
+# Total implied volatility evaluations: 2097152	Average time: 0.457764 microseconds	Average volatility [2097152]: 18.7276	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.249193
+#
+# |x|=512	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=3.22573e-112	beta_max=6.61626E-112	s_min=13.9032	s_mid=32	s_max=41.1406
+#
+# Total implied volatility evaluations: 2097152	Average time: 0.450611 microseconds	Average volatility [2097152]: 27.458	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.281398
+
+Average over 20 different values for x:  0.447392  microseconds per evaluation (41943040 successful evaluations in total).
+
+Total average |(attained accuracy)/(theoretically attainable accuracy)| : 0.20433.
+This means the method is on average 4.9 times more accurate than what one could
+hope for on the basis of first order error propagation analysis.
+

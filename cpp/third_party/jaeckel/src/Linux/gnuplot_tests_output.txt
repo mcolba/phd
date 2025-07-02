@@ -1,0 +1,10 @@
+make[1]: Entering directory './Implementation/LetsBeRational'
+cd ./Linux; gnuplot -e 'set print "-"; print "\nThis is gnuplot version ",GPVAL_VERSION,"."; load "letsberational.gnuplot"; sigma=ImpliedBlackVolatility(Black(1,1,1,1,1),1,1,1,1); print "\tImpliedBlackVolatility(Black(1,1,1,1,1),1,1,1,1) = ",sigma,"\n"'
+
+This is gnuplot version 5.4.
+
+Loaded dynamic load library LetsBeRational.so revision 1520 [64 bit RELEASE running on 12th Gen Intel(R) Core(TM) i5-12500H] compiled with GCC 11.4.0 on Feb 15 2024 18:47:33 from ./Linux/. .
+
+	ImpliedBlackVolatility(Black(1,1,1,1,1),1,1,1,1) = 1.0
+
+make[1]: Leaving directory './Implementation/LetsBeRational'

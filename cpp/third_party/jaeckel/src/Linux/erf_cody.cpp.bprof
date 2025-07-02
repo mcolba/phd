@@ -1,0 +1,606 @@
+   1:     .         	//
+   2:     .         	// Original Fortran code taken from http://www.netlib.org/specfun/erf, compiled with f2c, and adapted by hand.
+   3:     .         	//
+   4:     .         	// Created with command line f2c -C++ -c -a -krd -r8 cody_erf.f
+   5:     .         	//
+   6:     .         	// Translated by f2c (version 20100827).
+   7:     .         	//
+   8:     .         	
+   9:     .         	//
+  10:     .         	// This source code resides at www.jaeckel.org/LetsBeRational.7z .
+  11:     .         	//
+  12:     .         	// ======================================================================================
+  13:     .         	// WARRANTY DISCLAIMER
+  14:     .         	// The Software is provided "as is" without warranty of any kind, either express or implied,
+  15:     .         	// including without limitation any implied warranties of condition, uninterrupted use,
+  16:     .         	// merchantability, fitness for a particular purpose, or non-infringement.
+  17:     .         	// ======================================================================================
+  18:     .         	//
+  19:     .         	
+  20:     .         	#if defined( _DEBUG ) || defined( BOUNDS_CHECK_STL_ARRAYS )
+  21:     .         	#define _SECURE_SCL 1
+  22:     .         	#define _SECURE_SCL_THROWS 1
+  23:     .         	#define _SCL_SECURE_NO_WARNINGS
+  24:     .         	// #define _HAS_ITERATOR_DEBUGGING 0 // This causes the error "error LNK2038: mismatch detected for '_ITERATOR_DEBUG_LEVEL': value '2' doesn't match value '1' in erf_cody.obj"
+  25:     .         	#else
+  26:     .         	#define _SECURE_SCL 0
+  27:     .         	#endif
+  28:     .         	#if defined(_MSC_VER)
+  29:     .         	# define NOMINMAX // to suppress MSVC's definitions of min() and max()
+  30:     .         	// These four pragmas are the equivalent to /fp:fast.
+  31:     .         	# pragma float_control( except, off )
+  32:     .         	# pragma float_control( precise, off )
+  33:     .         	# pragma fp_contract( on )
+  34:     .         	# pragma fenv_access( off )
+  35:     .         	#endif
+  36:     .         	
+  37:     .         	#include "normaldistribution.h"
+  38:     .         	#include <math.h>
+  39:     .         	#include <float.h>
+  40:     .         	
+  41:     .         	#if defined( USE_ORIGINAL_FORMULATION )
+  42:     .         	
+  43:     .         	namespace {
+  44:     .         	   inline double d_int(const double x){ return( (x>0) ? floor(x) : -floor(-x) ); }
+  45:     .         	}
+  46:     .         	
+  47:     .         	/*<       SUBROUTINE CALERF(ARG,RESULT,JINT) >*/
+  48:     .         	double calerf(double x, const int jint) {
+  49:     .         	
+  50:     .         	   static const double a[5] = { 3.1611237438705656,113.864154151050156,377.485237685302021,3209.37758913846947,.185777706184603153 };
+  51:     .         	   static const double b[4] = { 23.6012909523441209,244.024637934444173,1282.61652607737228,2844.23683343917062 };
+  52:     .         	   static const double c__[9] = { .564188496988670089,8.88314979438837594,66.1191906371416295,298.635138197400131,881.95222124176909,1712.04761263407058,2051.07837782607147,1230.33935479799725,2.15311535474403846e-8 };
+  53:     .         	   static const double d__[8] = { 15.7449261107098347,117.693950891312499,537.181101862009858,1621.38957456669019,3290.79923573345963,4362.61909014324716,3439.36767414372164,1230.33935480374942 };
+  54:     .         	   static const double p[6] = { .305326634961232344,.360344899949804439,.125781726111229246,.0160837851487422766,6.58749161529837803e-4,.0163153871373020978 };
+  55:     .         	   static const double q[5] = { 2.56852019228982242,1.87295284992346047,.527905102951428412,.0605183413124413191,.00233520497626869185 };
+  56:     .         	
+  57:     .         	   static const double zero = 0.;
+  58:     .         	   static const double half = .5;
+  59:     .         	   static const double one = 1.;
+  60:     .         	   static const double two = 2.;
+  61:     .         	   static const double four = 4.;
+  62:     .         	   static const double sqrpi = 0.56418958354775628695;
+  63:     .         	   static const double thresh = .46875;
+  64:     .         	   static const double sixten = 16.;
+  65:     .         	
+  66:     .         	   double y, del, ysq, xden, xnum, result;
+  67:     .         	
+  68:     .         	   /* ------------------------------------------------------------------ */
+  69:     .         	   /* This packet evaluates  erf(x),  erfc(x),  and  exp(x*x)*erfc(x) */
+  70:     .         	   /*   for a real argument  x.  It contains three FUNCTION type */
+  71:     .         	   /*   subprograms: ERF, ERFC, and ERFCX (or DERF, DERFC, and DERFCX), */
+  72:     .         	   /*   and one SUBROUTINE type subprogram, CALERF.  The calling */
+  73:     .         	   /*   statements for the primary entries are: */
+  74:     .         	   /*                   Y=ERF(X)     (or   Y=DERF(X)), */
+  75:     .         	   /*                   Y=ERFC(X)    (or   Y=DERFC(X)), */
+  76:     .         	   /*   and */
+  77:     .         	   /*                   Y=ERFCX(X)   (or   Y=DERFCX(X)). */
+  78:     .         	   /*   The routine  CALERF  is intended for internal packet use only, */
+  79:     .         	   /*   all computations within the packet being concentrated in this */
+  80:     .         	   /*   routine.  The function subprograms invoke  CALERF  with the */
+  81:     .         	   /*   statement */
+  82:     .         	   /*          CALL CALERF(ARG,RESULT,JINT) */
+  83:     .         	   /*   where the parameter usage is as follows */
+  84:     .         	   /*      Function                     Parameters for CALERF */
+  85:     .         	   /*       call              ARG                  Result          JINT */
+  86:     .         	   /*     ERF(ARG)      ANY REAL ARGUMENT         ERF(ARG)          0 */
+  87:     .         	   /*     ERFC(ARG)     ABS(ARG) .LT. XBIG        ERFC(ARG)         1 */
+  88:     .         	   /*     ERFCX(ARG)    XNEG .LT. ARG .LT. XMAX   ERFCX(ARG)        2 */
+  89:     .         	   /*   The main computation evaluates near-minimax approximations */
+  90:     .         	   /*   from "Rational Chebyshev approximations for the error function" */
+  91:     .         	   /*   by W. J. Cody, Math. Comp., 1969, PP. 631-638.  This */
+  92:     .         	   /*   transportable program uses rational functions that theoretically */
+  93:     .         	   /*   approximate  erf(x)  and  erfc(x)  to at least 18 significant */
+  94:     .         	   /*   decimal digits.  The accuracy achieved depends on the arithmetic */
+  95:     .         	   /*   system, the compiler, the intrinsic functions, and proper */
+  96:     .         	   /*   selection of the machine-dependent constants. */
+  97:     .         	   /* ******************************************************************* */
+  98:     .         	   /* ******************************************************************* */
+  99:     .         	   /* Explanation of machine-dependent constants */
+ 100:     .         	   /*   XMIN   = the smallest positive floating-point number. */
+ 101:     .         	   /*   XINF   = the largest positive finite floating-point number. */
+ 102:     .         	   /*   XNEG   = the largest negative argument acceptable to ERFCX; */
+ 103:     .         	   /*            the negative of the solution to the equation */
+ 104:     .         	   /*            2*exp(x*x) = XINF. */
+ 105:     .         	   /*   XSMALL = argument below which erf(x) may be represented by */
+ 106:     .         	   /*            2*x/sqrt(pi)  and above which  x*x  will not underflow. */
+ 107:     .         	   /*            A conservative value is the largest machine number X */
+ 108:     .         	   /*            such that   1.0 + X = 1.0   to machine precision. */
+ 109:     .         	   /*   XBIG   = largest argument acceptable to ERFC;  solution to */
+ 110:     .         	   /*            the equation:  W(x) * (1-0.5/x**2) = XMIN,  where */
+ 111:     .         	   /*            W(x) = exp(-x*x)/[x*sqrt(pi)]. */
+ 112:     .         	   /*   XHUGE  = argument above which  1.0 - 1/(2*x*x) = 1.0  to */
+ 113:     .         	   /*            machine precision.  A conservative value is */
+ 114:     .         	   /*            1/[2*sqrt(XSMALL)] */
+ 115:     .         	   /*   XMAX   = largest acceptable argument to ERFCX; the minimum */
+ 116:     .         	   /*            of XINF and 1/[sqrt(pi)*XMIN]. */
+ 117:     .         	   // The numbers below were preselected for IEEE .
+ 118:     .         	   static const double xinf = 1.79e308;
+ 119:     .         	   static const double xneg = -26.628;
+ 120:     .         	   static const double xsmall = 1.11e-16;
+ 121:     .         	   static const double xbig = 26.543;
+ 122:     .         	   static const double xhuge = 6.71e7;
+ 123:     .         	   static const double xmax = 2.53e307;
+ 124:     .         	   /*   Approximate values for some important machines are: */
+ 125:     .         	   /*                          XMIN       XINF        XNEG     XSMALL */
+ 126:     .         	   /*  CDC 7600      (S.P.)  3.13E-294   1.26E+322   -27.220  7.11E-15 */
+ 127:     .         	   /*  CRAY-1        (S.P.)  4.58E-2467  5.45E+2465  -75.345  7.11E-15 */
+ 128:     .         	   /*  IEEE (IBM/XT, */
+ 129:     .         	   /*    SUN, etc.)  (S.P.)  1.18E-38    3.40E+38     -9.382  5.96E-8 */
+ 130:     .         	   /*  IEEE (IBM/XT, */
+ 131:     .         	   /*    SUN, etc.)  (D.P.)  2.23D-308   1.79D+308   -26.628  1.11D-16 */
+ 132:     .         	   /*  IBM 195       (D.P.)  5.40D-79    7.23E+75    -13.190  1.39D-17 */
+ 133:     .         	   /*  UNIVAC 1108   (D.P.)  2.78D-309   8.98D+307   -26.615  1.73D-18 */
+ 134:     .         	   /*  VAX D-Format  (D.P.)  2.94D-39    1.70D+38     -9.345  1.39D-17 */
+ 135:     .         	   /*  VAX G-Format  (D.P.)  5.56D-309   8.98D+307   -26.615  1.11D-16 */
+ 136:     .         	   /*                          XBIG       XHUGE       XMAX */
+ 137:     .         	   /*  CDC 7600      (S.P.)  25.922      8.39E+6     1.80X+293 */
+ 138:     .         	   /*  CRAY-1        (S.P.)  75.326      8.39E+6     5.45E+2465 */
+ 139:     .         	   /*  IEEE (IBM/XT, */
+ 140:     .         	   /*    SUN, etc.)  (S.P.)   9.194      2.90E+3     4.79E+37 */
+ 141:     .         	   /*  IEEE (IBM/XT, */
+ 142:     .         	   /*    SUN, etc.)  (D.P.)  26.543      6.71D+7     2.53D+307 */
+ 143:     .         	   /*  IBM 195       (D.P.)  13.306      1.90D+8     7.23E+75 */
+ 144:     .         	   /*  UNIVAC 1108   (D.P.)  26.582      5.37D+8     8.98D+307 */
+ 145:     .         	   /*  VAX D-Format  (D.P.)   9.269      1.90D+8     1.70D+38 */
+ 146:     .         	   /*  VAX G-Format  (D.P.)  26.569      6.71D+7     8.98D+307 */
+ 147:     .         	   /* ******************************************************************* */
+ 148:     .         	   /* ******************************************************************* */
+ 149:     .         	   /* Error returns */
+ 150:     .         	   /*  The program returns  ERFC = 0      for  ARG .GE. XBIG; */
+ 151:     .         	   /*                       ERFCX = XINF  for  ARG .LT. XNEG; */
+ 152:     .         	   /*      and */
+ 153:     .         	   /*                       ERFCX = 0     for  ARG .GE. XMAX. */
+ 154:     .         	   /* Intrinsic functions required are: */
+ 155:     .         	   /*     ABS, AINT, EXP */
+ 156:     .         	   /*  Author: W. J. Cody */
+ 157:     .         	   /*          Mathematics and Computer Science Division */
+ 158:     .         	   /*          Argonne National Laboratory */
+ 159:     .         	   /*          Argonne, IL 60439 */
+ 160:     .         	   /*  Latest modification: March 19, 1990 */
+ 161:     .         	   /* ------------------------------------------------------------------ */
+ 162:     .         	   /*<       INTEGER I,JINT >*/
+ 163:     .         	   /* S    REAL */
+ 164:     .         	   /*<    >*/
+ 165:     .         	   /*<       DIMENSION A(5),B(4),C(9),D(8),P(6),Q(5) >*/
+ 166:     .         	   /* ------------------------------------------------------------------ */
+ 167:     .         	   /*  Mathematical constants */
+ 168:     .         	   /* ------------------------------------------------------------------ */
+ 169:     .         	   /* S    DATA FOUR,ONE,HALF,TWO,ZERO/4.0E0,1.0E0,0.5E0,2.0E0,0.0E0/, */
+ 170:     .         	   /* S   1     SQRPI/5.6418958354775628695E-1/,THRESH/0.46875E0/, */
+ 171:     .         	   /* S   2     SIXTEN/16.0E0/ */
+ 172:     .         	   /*<    >*/
+ 173:     .         	   /* ------------------------------------------------------------------ */
+ 174:     .         	   /*  Machine-dependent constants */
+ 175:     .         	   /* ------------------------------------------------------------------ */
+ 176:     .         	   /* S    DATA XINF,XNEG,XSMALL/3.40E+38,-9.382E0,5.96E-8/, */
+ 177:     .         	   /* S   1     XBIG,XHUGE,XMAX/9.194E0,2.90E3,4.79E37/ */
+ 178:     .         	   /*<    >*/
+ 179:     .         	   /* ------------------------------------------------------------------ */
+ 180:     .         	   /*  Coefficients for approximation to  erf  in first interval */
+ 181:     .         	   /* ------------------------------------------------------------------ */
+ 182:     .         	   /* S    DATA A/3.16112374387056560E00,1.13864154151050156E02, */
+ 183:     .         	   /* S   1       3.77485237685302021E02,3.20937758913846947E03, */
+ 184:     .         	   /* S   2       1.85777706184603153E-1/ */
+ 185:     .         	   /* S    DATA B/2.36012909523441209E01,2.44024637934444173E02, */
+ 186:     .         	   /* S   1       1.28261652607737228E03,2.84423683343917062E03/ */
+ 187:     .         	   /*<    >*/
+ 188:     .         	   /*<    >*/
+ 189:     .         	   /* ------------------------------------------------------------------ */
+ 190:     .         	   /*  Coefficients for approximation to  erfc  in second interval */
+ 191:     .         	   /* ------------------------------------------------------------------ */
+ 192:     .         	   /* S    DATA C/5.64188496988670089E-1,8.88314979438837594E0, */
+ 193:     .         	   /* S   1       6.61191906371416295E01,2.98635138197400131E02, */
+ 194:     .         	   /* S   2       8.81952221241769090E02,1.71204761263407058E03, */
+ 195:     .         	   /* S   3       2.05107837782607147E03,1.23033935479799725E03, */
+ 196:     .         	   /* S   4       2.15311535474403846E-8/ */
+ 197:     .         	   /* S    DATA D/1.57449261107098347E01,1.17693950891312499E02, */
+ 198:     .         	   /* S   1       5.37181101862009858E02,1.62138957456669019E03, */
+ 199:     .         	   /* S   2       3.29079923573345963E03,4.36261909014324716E03, */
+ 200:     .         	   /* S   3       3.43936767414372164E03,1.23033935480374942E03/ */
+ 201:     .         	   /*<    >*/
+ 202:     .         	   /*<    >*/
+ 203:     .         	   /* ------------------------------------------------------------------ */
+ 204:     .         	   /*  Coefficients for approximation to  erfc  in third interval */
+ 205:     .         	   /* ------------------------------------------------------------------ */
+ 206:     .         	   /* S    DATA P/3.05326634961232344E-1,3.60344899949804439E-1, */
+ 207:     .         	   /* S   1       1.25781726111229246E-1,1.60837851487422766E-2, */
+ 208:     .         	   /* S   2       6.58749161529837803E-4,1.63153871373020978E-2/ */
+ 209:     .         	   /* S    DATA Q/2.56852019228982242E00,1.87295284992346047E00, */
+ 210:     .         	   /* S   1       5.27905102951428412E-1,6.05183413124413191E-2, */
+ 211:     .         	   /* S   2       2.33520497626869185E-3/ */
+ 212:     .         	   /*<    >*/
+ 213:     .         	   /*<    >*/
+ 214:     .         	   /* ------------------------------------------------------------------ */
+ 215:     .         	   /*<       X = ARG >*/
+ 216:     .         	   // x = *arg;
+ 217:     .         	   /*<       Y = ABS(X) >*/
+ 218:     .         	   y = fabs(x);
+ 219:     .         	   /*<       IF (Y .LE. THRESH) THEN >*/
+ 220:     .         	   if (y <= thresh) {
+ 221:     .         	      /* ------------------------------------------------------------------ */
+ 222:     .         	      /*  Evaluate  erf  for  |X| <= 0.46875 */
+ 223:     .         	      /* ------------------------------------------------------------------ */
+ 224:     .         	      /*<             YSQ = ZERO >*/
+ 225:     .         	      ysq = zero;
+ 226:     .         	      /*<             IF (Y .GT. XSMALL) YSQ = Y * Y >*/
+ 227:     .         	      if (y > xsmall) {
+ 228:     .         	         ysq = y * y;
+ 229:     .         	      }
+ 230:     .         	      /*<             XNUM = A(5)*YSQ >*/
+ 231:     .         	      xnum = a[4] * ysq;
+ 232:     .         	      /*<             XDEN = YSQ >*/
+ 233:     .         	      xden = ysq;
+ 234:     .         	      /*<             DO 20 I = 1, 3 >*/
+ 235:     .         	      for (int i__ = 1; i__ <= 3; ++i__) {
+ 236:     .         	         /*<                XNUM = (XNUM + A(I)) * YSQ >*/
+ 237:     .         	         xnum = (xnum + a[i__ - 1]) * ysq;
+ 238:     .         	         /*<                XDEN = (XDEN + B(I)) * YSQ >*/
+ 239:     .         	         xden = (xden + b[i__ - 1]) * ysq;
+ 240:     .         	         /*<    20       CONTINUE >*/
+ 241:     .         	         /* L20: */
+ 242:     .         	      }
+ 243:     .         	      /*<             RESULT = X * (XNUM + A(4)) / (XDEN + B(4)) >*/
+ 244:     .         	      result = x * (xnum + a[3]) / (xden + b[3]);
+ 245:     .         	      /*<             IF (JINT .NE. 0) RESULT = ONE - RESULT >*/
+ 246:     .         	      if (jint != 0) {
+ 247:     .         	         result = one - result;
+ 248:     .         	      }
+ 249:     .         	      /*<             IF (JINT .EQ. 2) RESULT = EXP(YSQ) * RESULT >*/
+ 250:     .         	      if (jint == 2) {
+ 251:     .         	         result = exp(ysq) * result;
+ 252:     .         	      }
+ 253:     .         	      /*<             GO TO 800 >*/
+ 254:     .         	      goto L800;
+ 255:     .         	      /* ------------------------------------------------------------------ */
+ 256:     .         	      /*  Evaluate  erfc  for 0.46875 <= |X| <= 4.0 */
+ 257:     .         	      /* ------------------------------------------------------------------ */
+ 258:     .         	      /*<          ELSE IF (Y .LE. FOUR) THEN >*/
+ 259:     .         	   } else if (y <= four) {
+ 260:     .         	      /*<             XNUM = C(9)*Y >*/
+ 261:     .         	      xnum = c__[8] * y;
+ 262:     .         	      /*<             XDEN = Y >*/
+ 263:     .         	      xden = y;
+ 264:     .         	      /*<             DO 120 I = 1, 7 >*/
+ 265:     .         	      for (int i__ = 1; i__ <= 7; ++i__) {
+ 266:     .         	         /*<                XNUM = (XNUM + C(I)) * Y >*/
+ 267:     .         	         xnum = (xnum + c__[i__ - 1]) * y;
+ 268:     .         	         /*<                XDEN = (XDEN + D(I)) * Y >*/
+ 269:     .         	         xden = (xden + d__[i__ - 1]) * y;
+ 270:     .         	         /*<   120       CONTINUE >*/
+ 271:     .         	         /* L120: */
+ 272:     .         	      }
+ 273:     .         	      /*<             RESULT = (XNUM + C(8)) / (XDEN + D(8)) >*/
+ 274:     .         	      result = (xnum + c__[7]) / (xden + d__[7]);
+ 275:     .         	      /*<             IF (JINT .NE. 2) THEN >*/
+ 276:     .         	      if (jint != 2) {
+ 277:     .         	         /*<                YSQ = AINT(Y*SIXTEN)/SIXTEN >*/
+ 278:     .         	         double d__1 = y * sixten;
+ 279:     .         	         ysq = d_int(d__1) / sixten;
+ 280:     .         	         /*<                DEL = (Y-YSQ)*(Y+YSQ) >*/
+ 281:     .         	         del = (y - ysq) * (y + ysq);
+ 282:     .         	         /*<                RESULT = EXP(-YSQ*YSQ) * EXP(-DEL) * RESULT >*/
+ 283:     .         	         d__1 = exp(-ysq * ysq) * exp(-del);
+ 284:     .         	         result = d__1 * result;
+ 285:     .         	         /*<             END IF >*/
+ 286:     .         	      }
+ 287:     .         	      /* ------------------------------------------------------------------ */
+ 288:     .         	      /*  Evaluate  erfc  for |X| > 4.0 */
+ 289:     .         	      /* ------------------------------------------------------------------ */
+ 290:     .         	      /*<          ELSE >*/
+ 291:     .         	   } else {
+ 292:     .         	      /*<             RESULT = ZERO >*/
+ 293:     .         	      result = zero;
+ 294:     .         	      /*<             IF (Y .GE. XBIG) THEN >*/
+ 295:     .         	      if (y >= xbig) {
+ 296:     .         	         /*<                IF ((JINT .NE. 2) .OR. (Y .GE. XMAX)) GO TO 300 >*/
+ 297:     .         	         if (jint != 2 || y >= xmax) {
+ 298:     .         	            goto L300;
+ 299:     .         	         }
+ 300:     .         	         /*<                IF (Y .GE. XHUGE) THEN >*/
+ 301:     .         	         if (y >= xhuge) {
+ 302:     .         	            /*<                   RESULT = SQRPI / Y >*/
+ 303:     .         	            result = sqrpi / y;
+ 304:     .         	            /*<                   GO TO 300 >*/
+ 305:     .         	            goto L300;
+ 306:     .         	            /*<                END IF >*/
+ 307:     .         	         }
+ 308:     .         	         /*<             END IF >*/
+ 309:     .         	      }
+ 310:     .         	      /*<             YSQ = ONE / (Y * Y) >*/
+ 311:     .         	      ysq = one / (y * y);
+ 312:     .         	      /*<             XNUM = P(6)*YSQ >*/
+ 313:     .         	      xnum = p[5] * ysq;
+ 314:     .         	      /*<             XDEN = YSQ >*/
+ 315:     .         	      xden = ysq;
+ 316:     .         	      /*<             DO 240 I = 1, 4 >*/
+ 317:     .         	      for (int i__ = 1; i__ <= 4; ++i__) {
+ 318:     .         	         /*<                XNUM = (XNUM + P(I)) * YSQ >*/
+ 319:     .         	         xnum = (xnum + p[i__ - 1]) * ysq;
+ 320:     .         	         /*<                XDEN = (XDEN + Q(I)) * YSQ >*/
+ 321:     .         	         xden = (xden + q[i__ - 1]) * ysq;
+ 322:     .         	         /*<   240       CONTINUE >*/
+ 323:     .         	         /* L240: */
+ 324:     .         	      }
+ 325:     .         	      /*<             RESULT = YSQ *(XNUM + P(5)) / (XDEN + Q(5)) >*/
+ 326:     .         	      result = ysq * (xnum + p[4]) / (xden + q[4]);
+ 327:     .         	      /*<             RESULT = (SQRPI -  RESULT) / Y >*/
+ 328:     .         	      result = (sqrpi - result) / y;
+ 329:     .         	      /*<             IF (JINT .NE. 2) THEN >*/
+ 330:     .         	      if (jint != 2) {
+ 331:     .         	         /*<                YSQ = AINT(Y*SIXTEN)/SIXTEN >*/
+ 332:     .         	         double d__1 = y * sixten;
+ 333:     .         	         ysq = d_int(d__1) / sixten;
+ 334:     .         	         /*<                DEL = (Y-YSQ)*(Y+YSQ) >*/
+ 335:     .         	         del = (y - ysq) * (y + ysq);
+ 336:     .         	         /*<                RESULT = EXP(-YSQ*YSQ) * EXP(-DEL) * RESULT >*/
+ 337:     .         	         d__1 = exp(-ysq * ysq) * exp(-del);
+ 338:     .         	         result = d__1 * result;
+ 339:     .         	         /*<             END IF >*/
+ 340:     .         	      }
+ 341:     .         	      /*<       END IF >*/
+ 342:     .         	   }
+ 343:     .         	   /* ------------------------------------------------------------------ */
+ 344:     .         	   /*  Fix up for negative argument, erf, etc. */
+ 345:     .         	   /* ------------------------------------------------------------------ */
+ 346:     .         	   /*<   300 IF (JINT .EQ. 0) THEN >*/
+ 347:     .         	L300:
+ 348:     .         	   if (jint == 0) {
+ 349:     .         	      /*<             RESULT = (HALF - RESULT) + HALF >*/
+ 350:     .         	      result = (half - result) + half;
+ 351:     .         	      /*<             IF (X .LT. ZERO) RESULT = -RESULT >*/
+ 352:     .         	      if (x < zero) {
+ 353:     .         	         result = -(result);
+ 354:     .         	      }
+ 355:     .         	      /*<          ELSE IF (JINT .EQ. 1) THEN >*/
+ 356:     .         	   } else if (jint == 1) {
+ 357:     .         	      /*<             IF (X .LT. ZERO) RESULT = TWO - RESULT >*/
+ 358:     .         	      if (x < zero) {
+ 359:     .         	         result = two - result;
+ 360:     .         	      }
+ 361:     .         	      /*<          ELSE >*/
+ 362:     .         	   } else {
+ 363:     .         	      /*<             IF (X .LT. ZERO) THEN >*/
+ 364:     .         	      if (x < zero) {
+ 365:     .         	         /*<                IF (X .LT. XNEG) THEN >*/
+ 366:     .         	         if (x < xneg) {
+ 367:     .         	            /*<                      RESULT = XINF >*/
+ 368:     .         	            result = xinf;
+ 369:     .         	            /*<                   ELSE >*/
+ 370:     .         	         } else {
+ 371:     .         	            /*<                      YSQ = AINT(X*SIXTEN)/SIXTEN >*/
+ 372:     .         	            double d__1 = x * sixten;
+ 373:     .         	            ysq = d_int(d__1) / sixten;
+ 374:     .         	            /*<                      DEL = (X-YSQ)*(X+YSQ) >*/
+ 375:     .         	            del = (x - ysq) * (x + ysq);
+ 376:     .         	            /*<                      Y = EXP(YSQ*YSQ) * EXP(DEL) >*/
+ 377:     .         	            y = exp(ysq * ysq) * exp(del);
+ 378:     .         	            /*<                      RESULT = (Y+Y) - RESULT >*/
+ 379:     .         	            result = y + y - result;
+ 380:     .         	            /*<                END IF >*/
+ 381:     .         	         }
+ 382:     .         	         /*<             END IF >*/
+ 383:     .         	      }
+ 384:     .         	      /*<       END IF >*/
+ 385:     .         	   }
+ 386:     .         	   /*<   800 RETURN >*/
+ 387:     .         	L800:
+ 388:     .         	   return result;
+ 389:     .         	   /* ---------- Last card of CALERF ---------- */
+ 390:     .         	   /*<       END >*/
+ 391:     .         	} /* calerf_ */
+ 392:     .         	
+ 393:     .         	/* S    REAL FUNCTION ERF(X) */
+ 394:     .         	/*<       DOUBLE PRECISION FUNCTION DERF(X) >*/
+ 395:     .         	double erf_cody(double x){
+ 396:     .         	   /* -------------------------------------------------------------------- */
+ 397:     .         	   /* This subprogram computes approximate values for erf(x). */
+ 398:     .         	   /*   (see comments heading CALERF). */
+ 399:     .         	   /*   Author/date: W. J. Cody, January 8, 1985 */
+ 400:     .         	   /* -------------------------------------------------------------------- */
+ 401:     .         	   /*<       INTEGER JINT >*/
+ 402:     .         	   /* S    REAL             X, RESULT */
+ 403:     .         	   /*<       DOUBLE PRECISION X, RESULT >*/
+ 404:     .         	   /* ------------------------------------------------------------------ */
+ 405:     .         	   /*<       JINT = 0 >*/
+ 406:     .         	   /*<       CALL CALERF(X,RESULT,JINT) >*/
+ 407:     .         	   return calerf(x, 0);
+ 408:     .         	   /* S    ERF = RESULT */
+ 409:     .         	   /*<       DERF = RESULT >*/
+ 410:     .         	   /*<       RETURN >*/
+ 411:     .         	   /* ---------- Last card of DERF ---------- */
+ 412:     .         	   /*<       END >*/
+ 413:     .         	} /* derf_ */
+ 414:     .         	
+ 415:     .         	/* S    REAL FUNCTION ERFC(X) */
+ 416:     .         	/*<       DOUBLE PRECISION FUNCTION DERFC(X) >*/
+ 417:     .         	double erfc_cody(double x) {
+ 418:     .         	   /* -------------------------------------------------------------------- */
+ 419:     .         	   /* This subprogram computes approximate values for erfc(x). */
+ 420:     .         	   /*   (see comments heading CALERF). */
+ 421:     .         	   /*   Author/date: W. J. Cody, January 8, 1985 */
+ 422:     .         	   /* -------------------------------------------------------------------- */
+ 423:     .         	   /*<       INTEGER JINT >*/
+ 424:     .         	   /* S    REAL             X, RESULT */
+ 425:     .         	   /*<       DOUBLE PRECISION X, RESULT >*/
+ 426:     .         	   /* ------------------------------------------------------------------ */
+ 427:     .         	   /*<       JINT = 1 >*/
+ 428:     .         	   /*<       CALL CALERF(X,RESULT,JINT) >*/
+ 429:     .         	   return calerf(x, 1);
+ 430:     .         	   /* S    ERFC = RESULT */
+ 431:     .         	   /*<       DERFC = RESULT >*/
+ 432:     .         	   /*<       RETURN >*/
+ 433:     .         	   /* ---------- Last card of DERFC ---------- */
+ 434:     .         	   /*<       END >*/
+ 435:     .         	} /* derfc_ */
+ 436:     .         	
+ 437:     .         	/* S    REAL FUNCTION ERFCX(X) */
+ 438:     .         	/*<       DOUBLE PRECISION FUNCTION DERFCX(X) >*/
+ 439:     .         	double erfcx_cody(double x) {
+ 440:     .         	   /* ------------------------------------------------------------------ */
+ 441:     .         	   /* This subprogram computes approximate values for exp(x*x) * erfc(x). */
+ 442:     .         	   /*   (see comments heading CALERF). */
+ 443:     .         	   /*   Author/date: W. J. Cody, March 30, 1987 */
+ 444:     .         	   /* ------------------------------------------------------------------ */
+ 445:     .         	   /*<       INTEGER JINT >*/
+ 446:     .         	   /* S    REAL             X, RESULT */
+ 447:     .         	   /*<       DOUBLE PRECISION X, RESULT >*/
+ 448:     .         	   /* ------------------------------------------------------------------ */
+ 449:     .         	   /*<       JINT = 2 >*/
+ 450:     .         	   /*<       CALL CALERF(X,RESULT,JINT) >*/
+ 451:     .         	   return calerf(x, 2);
+ 452:     .         	   /* S    ERFCX = RESULT */
+ 453:     .         	   /*<       DERFCX = RESULT >*/
+ 454:     .         	   /*<       RETURN >*/
+ 455:     .         	   /* ---------- Last card of DERFCX ---------- */
+ 456:     .         	   /*<       END >*/
+ 457:     .         	} /* derfcx_ */
+ 458:     .         	
+ 459:     .         	#else
+ 460:     .         	
+ 461:     .         	namespace {
+ 462:     .         	
+ 463:     .         	  inline double d_int(const double x) { return((x > 0) ? floor(x) : -floor(-x)); }
+ 464:     .         	
+ 465:     .         	  inline double smoothened_exponential_of_negative_square(double y) {
+ 466:     .         	    /*<                YSQ = AINT(Y*SIXTEN)/SIXTEN >*/
+ 467:   105 [ 0.21%]	    const double y_tilde = d_int(y * 16) / 16.0;
+ 468:     .         	    /*<                DEL = (Y-YSQ)*(Y+YSQ) >*/
+ 469:     .         	    /*<                RESULT = EXP(-YSQ*YSQ) * EXP(-DEL) * RESULT >*/
+ 470:     1 [ 0.01%]	    return exp(-y_tilde * y_tilde) * exp(-(y - y_tilde) * (y + y_tilde));
+ 471:     .         	  }
+ 472:     .         	
+ 473:     .         	  inline double smoothened_exponential_of_positive_square(double x) {
+ 474:     .         	    /*<                YSQ = AINT(X*SIXTEN)/SIXTEN >*/
+ 475:     .         	    const double x_tilde = d_int(x * 16) / 16.0;
+ 476:     .         	    /*<                DEL = (X-YSQ)*(X+YSQ) >*/
+ 477:     .         	    /*<                Y = EXP(YSQ*YSQ) * EXP(DEL) >*/
+ 478:     .         	    return exp(x_tilde * x_tilde) * exp((x - x_tilde) * (x + x_tilde));
+ 479:     .         	  }
+ 480:     .         	
+ 481:     .         	  const double a[5] = { 3.1611237438705656,113.864154151050156,377.485237685302021,3209.37758913846947,0.185777706184603153 };
+ 482:     .         	  const double b[4] = { 23.6012909523441209,244.024637934444173,1282.61652607737228,2844.23683343917062 };
+ 483:     .         	  const double c[9] = { .564188496988670089,8.88314979438837594,66.1191906371416295,298.635138197400131,881.95222124176909,1712.04761263407058,2051.07837782607147,1230.33935479799725,2.15311535474403846E-8 };
+ 484:     .         	  const double d[8] = { 15.7449261107098347,117.693950891312499,537.181101862009858,1621.38957456669019,3290.79923573345963,4362.61909014324716,3439.36767414372164,1230.33935480374942 };
+ 485:     .         	  const double p[6] = { 0.305326634961232344,0.360344899949804439,0.125781726111229246,0.0160837851487422766,6.58749161529837803E-4,0.0163153871373020978 };
+ 486:     .         	  const double q[5] = { 2.56852019228982242,1.87295284992346047,0.527905102951428412,0.0605183413124413191,0.00233520497626869185 };
+ 487:     .         	
+ 488:   123 [ 0.24%]	  inline double AB(double z) { return ((((a[4] * z + a[0]) * z + a[1]) * z + a[2]) * z + a[3]) / ((((z + b[0]) * z + b[1]) * z + b[2]) * z + b[3]); }
+ 489:  3018 [ 5.76%]	  inline double CD(double y) { return ((((((((c[8] * y + c[0]) * y + c[1]) * y + c[2]) * y + c[3]) * y + c[4]) * y + c[5]) * y + c[6]) * y + c[7]) / ((((((((y + d[0]) * y + d[1]) * y + d[2]) * y + d[3]) * y + d[4]) * y + d[5]) * y + d[6]) * y + d[7]); }
+ 490:  1673 [ 3.19%]	  inline double PQ(double z) { return z * (((((p[5] * z + p[0]) * z + p[1]) * z + p[2]) * z + p[3]) * z + p[4]) / (((((z + q[0]) * z + q[1]) * z + q[2]) * z + q[3]) * z + q[4]); }
+ 491:     .         	
+ 492:     .         	  const double ONE_OVER_SQRT_PI = 0.56418958354775628695; // 1/√π
+ 493:     .         	  const double THRESHOLD = 0.46875;
+ 494:     .         	  // The numbers below were preselected for IEEE .
+ 495:     .         	  // const double xinf = 1.79e308 --- replaced by DBL_MAX
+ 496:     .         	  const double XNEG = -26.6287357137514;             // The original value was -26.628. The new value was computed wih (wx)Maxima: DBL_MAX:1.7976931348623158B308; bf_find_root(exp(x^2)*erfc(x)-DBL_MAX,-26,-27);
+ 497:     .         	  const double XBIG = 26.543;
+ 498:     .         	  const double XHUGE = 6.71E7;
+ 499:     .         	  const double XMAX = 2.53E307;
+ 500:     .         	}
+ 501:     .         	
+ 502:     .         	#include <assert.h>
+ 503:     .         	
+ 504:     .         	// Cody's algorithm splits the calculation into three main branches.
+ 505:     .         	// ────────────────────────────────────────────────────────────────────────────────────────────────────────
+ 506:     .         	//
+ 507:     .         	// I)   For |x| <= 0.46875,
+ 508:     .         	//                           erf(x) = x·A(x²)/B(x²)
+ 509:     .         	// with
+ 510:     .         	//       A(z) := ((((a[4]·z+a[0])·z+a[1])·z+a[2])·z+a[3])
+ 511:     .         	//       B(z) := ((((z+b[0])·z+b[1])·z+b[2])·z+b[3])
+ 512:     .         	// and
+ 513:     .         	//                       erfc(x)    =  1-erf(x)
+ 514:     .         	//                       erfcx(x)   =  exp(x²)·(1-erf(x)) .
+ 515:     .         	//
+ 516:     .         	// ────────────────────────────────────────────────────────────────────────────────────────────────────────
+ 517:     .         	//
+ 518:     .         	// II)  For 0.46875 <= |x| <= 4,
+ 519:     .         	//                       erfcx(|x|) = C(|x|)/D(|x|)
+ 520:     .         	// with
+ 521:     .         	//       C(y) := ((((((((c[8]·y+c[0])·y+c[1])·y+c[2])·y+c[3])·y+c[4])·y+c[5])·y+c[6])·y+c[7])
+ 522:     .         	//       D(y) := ((((((((y+d[0])·y+d[1])·y+d[2])·y+d[3])·y+d[4])·y+d[5])·y+d[6])·y+d[7])
+ 523:     .         	// and
+ 524:     .         	//                       erfc(|x|)  =  exp(-x²)·erfcx(|x|)
+ 525:     .         	//                       erf(x)     =  1-erfc(x) .
+ 526:     .         	//
+ 527:     .         	// · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · ·
+ 528:     .         	//
+ 529:     .         	// III) For |x| > 4, we have the following schematic for the direct evaluation of erfc() and erfcx():
+ 530:     .         	//
+ 531:     .         	//                          FOUR            XBIG           XHUGE                         XMAX
+ 532:     .         	//                          (4)           (26.543)        (6.71E7)                    (2.53E307)
+ 533:     .         	//              ··· ─────────┼───────────────┼───────────────┼────────────────────────────┼─────────> x
+ 534:     .         	//      JINTs               FOUR            XBIG           XHUGE                         XMAX
+ 535:     .         	// ──────────────────────────┼───────────────┼───────────────┼────────────────────────────┼─────────> x
+ 536:     .         	//   1,0(erfc,erf):          ]      (i)      [     (iv)  ──>
+ 537:     .         	// ──────────────────────────┼───────────────┼───────────────┼────────────────────────────┼─────────> x
+ 538:     .         	//     2(erfcx):             ]         <────(ii)────>        [           (iii)            [   (iv)
+ 539:     .         	//
+ 540:     .         	//       (i):   exp(-x²)·[1/√π-P(z)/Q(z)]/|x| 
+ 541:     .         	//      (ii):       [1/√π-P(z)/Q(z)]/|x|
+ 542:     .         	//     (iii):           [1/√π]/|x|
+ 543:     .         	//      (iv):               0
+ 544:     .         	// with
+ 545:     .         	//      z    := 1/x²
+ 546:     .         	//      P(z) := z·(((((p[5]·z+p[0])·z+p[1])·z+p[2])·z+p[3])·z+p[4])
+ 547:     .         	//      Q(z) := (((((z+q[0])·z+q[1])·z+q[2])·z+q[3])·z+q[4]);
+ 548:     .         	//
+ 549:     .         	// NOTE: the actual function value computed when |x|>4 for JINT=0 or JINT=1 is ERFC (JINT=1), and for JINT=2 or JINT=3
+ 550:     .         	//       is ERFCX (JINT=2). Post-processing then takes care of the transformation from erfc to erf (JINT 1 -> 0) via erf(x)=1-erfc(x).
+ 551:     .         	//
+ 552:     .         	// · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · ·
+ 553:     .         	//
+ 554:     .         	// Evaluation for x < -0.46875 is done by the aid of
+ 555:     .         	//
+ 556:     .         	//                        erf(-x)     =  -erf(x)  =  erfc(x)-1
+ 557:     .         	//                        erfc(-x)    =  2-erfc(x)
+ 558:     .         	//                        erfcx(-x)   =  2·exp(x²)-erfcx(x) .
+ 559:     .         	//
+ 560:     .         	// using the computation of erfc(|x|) or erfcx(|x|), respectively, according to whether |x|<=4 or |x|>4 as in II) and III).
+ 561:     .         	//
+ 562:     .         	
+ 563:     .         	// erfc(x)  =  2 - erfc(-x)
+ 564:    85 [ 0.17%]	double erfc_cody(double x) {
+ 565:     .         	  double y = fabs(x);
+ 566:     6 [ 0.02%]	  if (y <= THRESHOLD) //       |x| <= 0.46875
+ 567:   143 [ 0.28%]	    return 1 - x * AB(y * y);
+ 568:     .         	  // Compute erfc(|x|)
+ 569:   509 [ 0.98%]	  double erfc_abs_x = (y >= XBIG) ? 0 /* when |x| ≥ 26.543 */ : ((y <= 4) ? CD(y) /* when 0.46875 < |x| <= 4.0 */ : (ONE_OVER_SQRT_PI - PQ(1 / (y * y))) / y /* when 4.0 < |x| < 26.543 */) * smoothened_exponential_of_negative_square(y);
+ 570:    41 [ 0.08%]	  return x < 0 ? 2 - erfc_abs_x : erfc_abs_x;
+ 571:    30 [ 0.06%]	}
+ 572:     .         	
+ 573:     .         	// erf(x)  =  -erf(-x)  =  1 - erfc(x)  =  erfc(-x) - 1
+ 574:     .         	double erf_cody(double x) {
+ 575:     .         	  double y = fabs(x);
+ 576:     .         	  if (y <= THRESHOLD) //       |x| <= 0.46875
+ 577:     .         	    return x * AB(y * y);
+ 578:     .         	  // Compute erfc(|x|)
+ 579:     .         	  double erfc_abs_x = (y >= XBIG) ? 0 /* when |x| ≥ 26.543 */ : ((y <= 4) ? CD(y) /* when 0.46875 < |x| <= 4.0 */ : (ONE_OVER_SQRT_PI - PQ(1 / (y * y))) / y /* when 4.0 < |x| < 26.543 */) * smoothened_exponential_of_negative_square(y);
+ 580:     .         	  return x < 0 ? erfc_abs_x - 1 : 1 - erfc_abs_x;
+ 581:     .         	}
+ 582:     .         	
+ 583:     .         	double erfcx_cody_above_threshold(double y) {
+ 584:     .         	  assert(!(y <= THRESHOLD)); // This formulation also permits y==NaN.
+ 585:    14 [ 0.03%]	  if (y <= 4)    // 0.46875 < |x| <= 4.0
+ 586:   795 [ 1.52%]	    return CD(y);
+ 587:  1060 [ 2.03%]	  return (ONE_OVER_SQRT_PI - PQ(1 / (y * y))) / y;
+ 588:     .         	}
+ 589:     .         	
+ 590:   266 [ 0.51%]	double erfcx_cody(double x) {
+ 591:   156 [ 0.30%]	  double y = fabs(x);
+ 592:   230 [ 0.44%]	  if (y <= THRESHOLD) { // |x| <= 0.46875
+ 593:     2 [ 0.01%]	    const double z = y * y;
+ 594:     3 [ 0.01%]	    return exp(z) * (1 - x * AB(z));
+ 595:     .         	  }
+ 596:    91 [ 0.18%]	  if (x < XNEG) //          x < -26.6287357137514
+ 597:   141 [ 0.27%]	    return DBL_MAX;
+ 598:     .         	  const double result = erfcx_cody_above_threshold(y);
+ 599:   834 [ 1.60%]	  if (x < 0) {
+ 600:     .         	    const double expx2 = smoothened_exponential_of_positive_square(x);
+ 601:     .         	    return (expx2 + expx2) - result;
+ 602:     .         	  }
+ 603:     .         	  return result;
+ 604:   134 [ 0.26%]	}
+ 605:     .         	
+ 606:     .         	#endif

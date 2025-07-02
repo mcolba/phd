@@ -1,0 +1,431 @@
+
+letsberational_profiling	2097152	0 1e-14 1e-08 0.0001 0.001 0.01 0.05 0.1 0.25 0.5 1 2 4 8 16 32 64 128 256 512
+
+Loaded letsberational_profiling revision 1520 [64 bit RELEASE running on 12th Gen Intel(R) Core(TM) i5-12500H] compiled with GCC 11.4.0 on Feb 15 2024 22:46:18 from ./Linux/. .
+
+Average over 20 different values for x:  0.200746  microseconds per evaluation (41943040 successful evaluations in total).
+
+Total average |(attained accuracy)/(theoretically attainable accuracy)| : 0.195557.
+This means the method is on average 5.1 times more accurate than what one could
+hope for on the basis of first order error propagation analysis.
+
+Flat profile:
+
+Each sample counts as 0.01 seconds.
+  %   cumulative   self              self     total           
+ time   seconds   seconds    calls  ns/call  ns/call  name    
+ 39.42      2.44     2.44 62914633    38.78    71.45  lets_be_rational
+ 15.02      3.37     0.93 103791926     8.96     8.96  asymptotic_expansion_of_scaled_normalised_black(double, double)
+  8.56      3.90     0.53 56938203     9.31     9.31  inverse_norm_cdf
+  7.43      4.36     0.46                             main
+  4.20      4.62     0.26 103148829     2.52     2.52  erfc_cody(double)
+  4.04      4.87     0.25 119110046     2.10    10.57  scaled_normalised_black_and_ln_vega(double, double)
+  3.72      5.10     0.23 159469444     1.44     1.44  erfcx_cody_above_threshold(double)
+  3.23      5.30     0.20                             _init
+  2.75      5.47     0.17 160338615     1.06     2.49  erfcx_cody(double)
+  2.42      5.62     0.15 62914633     2.38    73.83  ImpliedBlackVolatility
+  1.62      5.72     0.10 19021759     5.26     5.26  convex_rational_cubic_control_parameter_to_fit_second_derivative_at_left_side(double, double, double, double, double, double, double, bool)
+  1.45      5.81     0.09 11105267     8.10     9.20  small_t_expansion_of_scaled_normalised_black(double, double)
+  1.13      5.88     0.07 58867679     1.19     1.19  rational_cubic_interpolation(double, double, double, double, double, double, double, double)
+  1.13      5.95     0.07 49718270     1.41     6.42  normalised_black_with_optimal_use_of_codys_functions(double, double)
+  0.97      6.01     0.06 41943072     1.43     9.63  Black
+  0.97      6.07     0.06 41943040     1.43    11.47  BlackAccuracyFactor
+  0.97      6.13     0.06 39845920     1.51     1.51  convex_rational_cubic_control_parameter_to_fit_second_derivative_at_right_side(double, double, double, double, double, double, double, bool)
+  0.81      6.18     0.05 45505417     1.10     8.63  normalised_black(double, double)
+  0.16      6.19     0.01 11105267     0.90     1.10  Yprime(double)
+  0.00      6.19     0.00  3173185     0.00     0.00  erf_cody(double)
+  0.00      6.19     0.00  3145733     0.00     0.00  erfinv(double)
+  0.00      6.19     0.00       77     0.00     0.00  void std::vector<char const*, std::allocator<char const*> >::_M_realloc_insert<char const* const&>(__gnu_cxx::__normal_iterator<char const**, std::vector<char const*, std::allocator<char const*> > >, char const* const&)
+  0.00      6.19     0.00       46     0.00     0.00  XLFunction::Declare(char const*, char const*, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::vector<char const*, std::allocator<char const*> > const&)
+  0.00      6.19     0.00       35     0.00     0.00  std::vector<char const*, std::allocator<char const*> >::vector(std::initializer_list<char const*>, std::allocator<char const*> const&)
+  0.00      6.19     0.00       23     0.00     0.00  std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > std::operator+<char, std::char_traits<char>, std::allocator<char> >(char, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+  0.00      6.19     0.00       20     0.00     8.20  NormalisedBlack
+  0.00      6.19     0.00       15     0.00     0.00  XLFunction::Declare(char const*, std::vector<char const*, std::allocator<char const*> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::vector<char const*, std::allocator<char const*> > const&)
+  0.00      6.19     0.00       10     0.00     0.00  XLFunction::Declare(char const*, char const*, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*)
+  0.00      6.19     0.00        7     0.00     0.00  void std::vector<XLFunction, std::allocator<XLFunction> >::_M_realloc_insert<XLFunction>(__gnu_cxx::__normal_iterator<XLFunction*, std::vector<XLFunction, std::allocator<XLFunction> > >, XLFunction&&)
+  0.00      6.19     0.00        5     0.00     0.00  std::vector<double, std::allocator<double> >::vector(unsigned long, std::allocator<double> const&)
+  0.00      6.19     0.00        2     0.00     0.00  (anonymous namespace)::this_file_name()
+  0.00      6.19     0.00        1     0.00     0.00  Bitness
+  0.00      6.19     0.00        1     0.00     0.00  BuildConfiguration
+  0.00      6.19     0.00        1     0.00     0.00  BuildDate
+  0.00      6.19     0.00        1     0.00     0.00  CPUName
+  0.00      6.19     0.00        1     0.00     0.00  CompilerVersion
+  0.00      6.19     0.00        1     0.00     0.00  DLLDirectory
+  0.00      6.19     0.00        1     0.00     0.00  DLLName
+  0.00      6.19     0.00        1     0.00     0.00  Revision
+  0.00      6.19     0.00        1     0.00     0.00  (anonymous namespace)::get_file_name()
+  0.00      6.19     0.00        1     0.00     0.00  void (anonymous namespace)::free_xloper_content<XLOper12>(XLOper12*)
+  0.00      6.19     0.00        1     0.00     0.00  (anonymous namespace)::skip_path(char const*)
+  0.00      6.19     0.00        1     0.00     0.00  std::map<char, wchar_t, std::less<char>, std::allocator<std::pair<char const, wchar_t> > >::map(std::initializer_list<std::pair<char const, wchar_t> >, std::less<char> const&, std::allocator<std::pair<char const, wchar_t> > const&)
+  0.00      6.19     0.00        1     0.00     0.00  std::_Rb_tree<char, std::pair<char const, wchar_t>, std::_Select1st<std::pair<char const, wchar_t> >, std::less<char>, std::allocator<std::pair<char const, wchar_t> > >::_M_get_insert_unique_pos(char const&)
+  0.00      6.19     0.00        1     0.00     0.00  _sub_I_00100_0
+  0.00      6.19     0.00        1     0.00     0.00  _sub_I_00100_0
+
+ %         the percentage of the total running time of the
+time       program used by this function.
+
+cumulative a running sum of the number of seconds accounted
+ seconds   for by this function and those listed above it.
+
+ self      the number of seconds accounted for by this
+seconds    function alone.  This is the major sort for this
+           listing.
+
+calls      the number of times this function was invoked, if
+           this function is profiled, else blank.
+
+ self      the average number of milliseconds spent in this
+ms/call    function per call, if this function is profiled,
+	   else blank.
+
+ total     the average number of milliseconds spent in this
+ms/call    function and its descendents per call, if this
+	   function is profiled, else blank.
+
+name       the name of the function.  This is the minor sort
+           for this listing. The index shows the location of
+	   the function in the gprof listing. If the index is
+	   in parenthesis it shows where it would appear in
+	   the gprof listing if it were to be printed.
+
+Copyright (C) 2012-2022 Free Software Foundation, Inc.
+
+Copying and distribution of this file, with or without modification,
+are permitted in any medium without royalty provided the copyright
+notice and this notice are preserved.
+
+		     Call graph (explanation follows)
+
+
+granularity: each sample hit covers 4 byte(s) for 0.16% of 6.19 seconds
+
+index % time    self  children    called     name
+                                                 <spontaneous>
+[1]     96.8    0.46    5.53                 main [1]
+                0.15    4.49 62914633/62914633     ImpliedBlackVolatility [2]
+                0.06    0.42 41943040/41943040     BlackAccuracyFactor [7]
+                0.06    0.34 41943072/41943072     Black [8]
+                0.00    0.00      20/20          NormalisedBlack [20]
+                0.00    0.00       5/5           std::vector<double, std::allocator<double> >::vector(unsigned long, std::allocator<double> const&) [67]
+                0.00    0.00       1/1           (anonymous namespace)::skip_path(char const*) [71]
+                0.00    0.00       1/1           DLLDirectory [26]
+                0.00    0.00       1/1           BuildDate [23]
+                0.00    0.00       1/1           CompilerVersion [25]
+                0.00    0.00       1/1           CPUName [24]
+                0.00    0.00       1/1           BuildConfiguration [22]
+                0.00    0.00       1/1           Bitness [21]
+                0.00    0.00       1/1           Revision [28]
+                0.00    0.00       1/1           DLLName [27]
+-----------------------------------------------
+                0.15    4.49 62914633/62914633     main [1]
+[2]     75.0    0.15    4.49 62914633         ImpliedBlackVolatility [2]
+                2.44    2.05 62914633/62914633     lets_be_rational [3]
+-----------------------------------------------
+                2.44    2.05 62914633/62914633     ImpliedBlackVolatility [2]
+[3]     72.6    2.44    2.05 62914633         lets_be_rational [3]
+                0.17    0.67 79264158/119110046     scaled_normalised_black_and_ln_vega(double, double) [4]
+                0.53    0.00 56938203/56938203     inverse_norm_cdf [6]
+                0.11    0.15 106243530/160338615     erfcx_cody(double) [9]
+                0.14    0.00 56938203/103148829     erfc_cody(double) [12]
+                0.10    0.00 19021759/19021759     convex_rational_cubic_control_parameter_to_fit_second_derivative_at_left_side(double, double, double, double, double, double, double, bool) [16]
+                0.07    0.00 58867679/58867679     rational_cubic_interpolation(double, double, double, double, double, double, double, double) [17]
+                0.06    0.00 39845920/39845920     convex_rational_cubic_control_parameter_to_fit_second_derivative_at_right_side(double, double, double, double, double, double, double, bool) [18]
+                0.01    0.04 5659482/45505417     normalised_black(double, double) [10]
+                0.00    0.00 3145733/3145733     erfinv(double) [59]
+-----------------------------------------------
+                0.08    0.34 39845888/119110046     BlackAccuracyFactor [7]
+                0.17    0.67 79264158/119110046     lets_be_rational [3]
+[4]     20.3    0.25    1.01 119110046         scaled_normalised_black_and_ln_vega(double, double) [4]
+                0.78    0.00 86520452/103791926     asymptotic_expansion_of_scaled_normalised_black(double, double) [5]
+                0.03    0.12 23937858/49718270     normalised_black_with_optimal_use_of_codys_functions(double, double) [11]
+                0.07    0.01 8651736/11105267     small_t_expansion_of_scaled_normalised_black(double, double) [15]
+-----------------------------------------------
+                0.15    0.00 17271474/103791926     normalised_black(double, double) [10]
+                0.78    0.00 86520452/103791926     scaled_normalised_black_and_ln_vega(double, double) [4]
+[5]     15.0    0.93    0.00 103791926         asymptotic_expansion_of_scaled_normalised_black(double, double) [5]
+-----------------------------------------------
+                0.53    0.00 56938203/56938203     lets_be_rational [3]
+[6]      8.6    0.53    0.00 56938203         inverse_norm_cdf [6]
+-----------------------------------------------
+                0.06    0.42 41943040/41943040     main [1]
+[7]      7.8    0.06    0.42 41943040         BlackAccuracyFactor [7]
+                0.08    0.34 39845888/119110046     scaled_normalised_black_and_ln_vega(double, double) [4]
+                0.00    0.00 1076029/3173185     erf_cody(double) [58]
+-----------------------------------------------
+                0.06    0.34 41943072/41943072     main [1]
+[8]      6.5    0.06    0.34 41943072         Black [8]
+                0.04    0.30 39845916/45505417     normalised_black(double, double) [10]
+                0.00    0.00 2097155/3173185     erf_cody(double) [58]
+-----------------------------------------------
+                0.00    0.00  869171/160338615     Yprime(double) [19]
+                0.06    0.08 53225914/160338615     normalised_black_with_optimal_use_of_codys_functions(double, double) [11]
+                0.11    0.15 106243530/160338615     lets_be_rational [3]
+[9]      6.5    0.17    0.23 160338615         erfcx_cody(double) [9]
+                0.23    0.00 159469444/159469444     erfcx_cody_above_threshold(double) [13]
+-----------------------------------------------
+                0.00    0.00      19/45505417     NormalisedBlack [20]
+                0.01    0.04 5659482/45505417     lets_be_rational [3]
+                0.04    0.30 39845916/45505417     Black [8]
+[10]     6.3    0.05    0.34 45505417         normalised_black(double, double) [10]
+                0.04    0.13 25780412/49718270     normalised_black_with_optimal_use_of_codys_functions(double, double) [11]
+                0.15    0.00 17271474/103791926     asymptotic_expansion_of_scaled_normalised_black(double, double) [5]
+                0.02    0.00 2453531/11105267     small_t_expansion_of_scaled_normalised_black(double, double) [15]
+-----------------------------------------------
+                0.03    0.12 23937858/49718270     scaled_normalised_black_and_ln_vega(double, double) [4]
+                0.04    0.13 25780412/49718270     normalised_black(double, double) [10]
+[11]     5.2    0.07    0.25 49718270         normalised_black_with_optimal_use_of_codys_functions(double, double) [11]
+                0.06    0.08 53225914/160338615     erfcx_cody(double) [9]
+                0.12    0.00 46210626/103148829     erfc_cody(double) [12]
+-----------------------------------------------
+                0.12    0.00 46210626/103148829     normalised_black_with_optimal_use_of_codys_functions(double, double) [11]
+                0.14    0.00 56938203/103148829     lets_be_rational [3]
+[12]     4.2    0.26    0.00 103148829         erfc_cody(double) [12]
+-----------------------------------------------
+                0.23    0.00 159469444/159469444     erfcx_cody(double) [9]
+[13]     3.7    0.23    0.00 159469444         erfcx_cody_above_threshold(double) [13]
+-----------------------------------------------
+                                                 <spontaneous>
+[14]     3.2    0.20    0.00                 _init [14]
+-----------------------------------------------
+                0.02    0.00 2453531/11105267     normalised_black(double, double) [10]
+                0.07    0.01 8651736/11105267     scaled_normalised_black_and_ln_vega(double, double) [4]
+[15]     1.7    0.09    0.01 11105267         small_t_expansion_of_scaled_normalised_black(double, double) [15]
+                0.01    0.00 11105267/11105267     Yprime(double) [19]
+-----------------------------------------------
+                0.10    0.00 19021759/19021759     lets_be_rational [3]
+[16]     1.6    0.10    0.00 19021759         convex_rational_cubic_control_parameter_to_fit_second_derivative_at_left_side(double, double, double, double, double, double, double, bool) [16]
+-----------------------------------------------
+                0.07    0.00 58867679/58867679     lets_be_rational [3]
+[17]     1.1    0.07    0.00 58867679         rational_cubic_interpolation(double, double, double, double, double, double, double, double) [17]
+-----------------------------------------------
+                0.06    0.00 39845920/39845920     lets_be_rational [3]
+[18]     1.0    0.06    0.00 39845920         convex_rational_cubic_control_parameter_to_fit_second_derivative_at_right_side(double, double, double, double, double, double, double, bool) [18]
+-----------------------------------------------
+                0.01    0.00 11105267/11105267     small_t_expansion_of_scaled_normalised_black(double, double) [15]
+[19]     0.2    0.01    0.00 11105267         Yprime(double) [19]
+                0.00    0.00  869171/160338615     erfcx_cody(double) [9]
+-----------------------------------------------
+                0.00    0.00      20/20          main [1]
+[20]     0.0    0.00    0.00      20         NormalisedBlack [20]
+                0.00    0.00      19/45505417     normalised_black(double, double) [10]
+                0.00    0.00       1/3173185     erf_cody(double) [58]
+-----------------------------------------------
+                0.00    0.00       1/1           main [1]
+[21]     0.0    0.00    0.00       1         Bitness [21]
+-----------------------------------------------
+                0.00    0.00       1/1           main [1]
+[22]     0.0    0.00    0.00       1         BuildConfiguration [22]
+-----------------------------------------------
+                0.00    0.00       1/1           main [1]
+[23]     0.0    0.00    0.00       1         BuildDate [23]
+-----------------------------------------------
+                0.00    0.00       1/1           main [1]
+[24]     0.0    0.00    0.00       1         CPUName [24]
+-----------------------------------------------
+                0.00    0.00       1/1           main [1]
+[25]     0.0    0.00    0.00       1         CompilerVersion [25]
+-----------------------------------------------
+                0.00    0.00       1/1           main [1]
+[26]     0.0    0.00    0.00       1         DLLDirectory [26]
+                0.00    0.00       1/2           (anonymous namespace)::this_file_name() [68]
+                0.00    0.00       1/35          std::vector<char const*, std::allocator<char const*> >::vector(std::initializer_list<char const*>, std::allocator<char const*> const&) [62]
+-----------------------------------------------
+                0.00    0.00       1/1           main [1]
+[27]     0.0    0.00    0.00       1         DLLName [27]
+                0.00    0.00       1/2           (anonymous namespace)::this_file_name() [68]
+-----------------------------------------------
+                0.00    0.00       1/1           main [1]
+[28]     0.0    0.00    0.00       1         Revision [28]
+-----------------------------------------------
+                0.00    0.00       1/3173185     NormalisedBlack [20]
+                0.00    0.00 1076029/3173185     BlackAccuracyFactor [7]
+                0.00    0.00 2097155/3173185     Black [8]
+[58]     0.0    0.00    0.00 3173185         erf_cody(double) [58]
+-----------------------------------------------
+                0.00    0.00 3145733/3145733     lets_be_rational [3]
+[59]     0.0    0.00    0.00 3145733         erfinv(double) [59]
+-----------------------------------------------
+                0.00    0.00      77/77          XLFunction::Declare(char const*, char const*, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::vector<char const*, std::allocator<char const*> > const&) [61]
+[60]     0.0    0.00    0.00      77         void std::vector<char const*, std::allocator<char const*> >::_M_realloc_insert<char const* const&>(__gnu_cxx::__normal_iterator<char const**, std::vector<char const*, std::allocator<char const*> > >, char const* const&) [60]
+-----------------------------------------------
+                0.00    0.00       2/46          _sub_I_00100_0 [74]
+                0.00    0.00      10/46          XLFunction::Declare(char const*, char const*, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*) [65]
+                0.00    0.00      34/46          XLFunction::Declare(char const*, std::vector<char const*, std::allocator<char const*> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::vector<char const*, std::allocator<char const*> > const&) [64]
+[61]     0.0    0.00    0.00      46         XLFunction::Declare(char const*, char const*, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::vector<char const*, std::allocator<char const*> > const&) [61]
+                0.00    0.00      77/77          void std::vector<char const*, std::allocator<char const*> >::_M_realloc_insert<char const* const&>(__gnu_cxx::__normal_iterator<char const**, std::vector<char const*, std::allocator<char const*> > >, char const* const&) [60]
+                0.00    0.00      23/23          std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > std::operator+<char, std::char_traits<char>, std::allocator<char> >(char, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) [63]
+                0.00    0.00       7/7           void std::vector<XLFunction, std::allocator<XLFunction> >::_M_realloc_insert<XLFunction>(__gnu_cxx::__normal_iterator<XLFunction*, std::vector<XLFunction, std::allocator<XLFunction> > >, XLFunction&&) [66]
+-----------------------------------------------
+                0.00    0.00       1/35          _sub_I_00100_0 [75]
+                0.00    0.00       1/35          DLLDirectory [26]
+                0.00    0.00       2/35          (anonymous namespace)::get_file_name() [69]
+                0.00    0.00       4/35          std::map<char, wchar_t, std::less<char>, std::allocator<std::pair<char const, wchar_t> > >::~map() [212]
+                0.00    0.00      27/35          _sub_I_00100_0 [74]
+[62]     0.0    0.00    0.00      35         std::vector<char const*, std::allocator<char const*> >::vector(std::initializer_list<char const*>, std::allocator<char const*> const&) [62]
+-----------------------------------------------
+                0.00    0.00      23/23          XLFunction::Declare(char const*, char const*, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::vector<char const*, std::allocator<char const*> > const&) [61]
+[63]     0.0    0.00    0.00      23         std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > std::operator+<char, std::char_traits<char>, std::allocator<char> >(char, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) [63]
+-----------------------------------------------
+                0.00    0.00       1/15          _sub_I_00100_0 [75]
+                0.00    0.00      14/15          _sub_I_00100_0 [74]
+[64]     0.0    0.00    0.00      15         XLFunction::Declare(char const*, std::vector<char const*, std::allocator<char const*> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::vector<char const*, std::allocator<char const*> > const&) [64]
+                0.00    0.00      34/46          XLFunction::Declare(char const*, char const*, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::vector<char const*, std::allocator<char const*> > const&) [61]
+-----------------------------------------------
+                0.00    0.00       2/10          _sub_I_00100_0 [74]
+                0.00    0.00       8/10          _sub_I_00100_0 [75]
+[65]     0.0    0.00    0.00      10         XLFunction::Declare(char const*, char const*, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*) [65]
+                0.00    0.00      10/46          XLFunction::Declare(char const*, char const*, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::vector<char const*, std::allocator<char const*> > const&) [61]
+-----------------------------------------------
+                0.00    0.00       7/7           XLFunction::Declare(char const*, char const*, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::vector<char const*, std::allocator<char const*> > const&) [61]
+[66]     0.0    0.00    0.00       7         void std::vector<XLFunction, std::allocator<XLFunction> >::_M_realloc_insert<XLFunction>(__gnu_cxx::__normal_iterator<XLFunction*, std::vector<XLFunction, std::allocator<XLFunction> > >, XLFunction&&) [66]
+-----------------------------------------------
+                0.00    0.00       5/5           main [1]
+[67]     0.0    0.00    0.00       5         std::vector<double, std::allocator<double> >::vector(unsigned long, std::allocator<double> const&) [67]
+-----------------------------------------------
+                0.00    0.00       1/2           DLLName [27]
+                0.00    0.00       1/2           DLLDirectory [26]
+[68]     0.0    0.00    0.00       2         (anonymous namespace)::this_file_name() [68]
+                0.00    0.00       1/1           (anonymous namespace)::get_file_name() [69]
+-----------------------------------------------
+                0.00    0.00       1/1           (anonymous namespace)::this_file_name() [68]
+[69]     0.0    0.00    0.00       1         (anonymous namespace)::get_file_name() [69]
+                0.00    0.00       2/35          std::vector<char const*, std::allocator<char const*> >::vector(std::initializer_list<char const*>, std::allocator<char const*> const&) [62]
+-----------------------------------------------
+                0.00    0.00       1/1           XLOper::~XLOper() [115]
+[70]     0.0    0.00    0.00       1         void (anonymous namespace)::free_xloper_content<XLOper12>(XLOper12*) [70]
+-----------------------------------------------
+                0.00    0.00       1/1           main [1]
+[71]     0.0    0.00    0.00       1         (anonymous namespace)::skip_path(char const*) [71]
+-----------------------------------------------
+                0.00    0.00       1/1           _sub_I_00100_0 [75]
+[72]     0.0    0.00    0.00       1         std::map<char, wchar_t, std::less<char>, std::allocator<std::pair<char const, wchar_t> > >::map(std::initializer_list<std::pair<char const, wchar_t> >, std::less<char> const&, std::allocator<std::pair<char const, wchar_t> > const&) [72]
+                0.00    0.00       1/1           std::_Rb_tree<char, std::pair<char const, wchar_t>, std::_Select1st<std::pair<char const, wchar_t> >, std::less<char>, std::allocator<std::pair<char const, wchar_t> > >::_M_get_insert_unique_pos(char const&) [73]
+-----------------------------------------------
+                0.00    0.00       1/1           std::map<char, wchar_t, std::less<char>, std::allocator<std::pair<char const, wchar_t> > >::map(std::initializer_list<std::pair<char const, wchar_t> >, std::less<char> const&, std::allocator<std::pair<char const, wchar_t> > const&) [72]
+[73]     0.0    0.00    0.00       1         std::_Rb_tree<char, std::pair<char const, wchar_t>, std::_Select1st<std::pair<char const, wchar_t> >, std::less<char>, std::allocator<std::pair<char const, wchar_t> > >::_M_get_insert_unique_pos(char const&) [73]
+-----------------------------------------------
+                                  54             _sub_I_00100_0 [74]
+                0.00    0.00       1/1           _GLOBAL__sub_I__Z47asymptotic_expansion_of_scaled_normalised_blackdd [76]
+[74]     0.0    0.00    0.00       1+54      _sub_I_00100_0 [74]
+                0.00    0.00      27/35          std::vector<char const*, std::allocator<char const*> >::vector(std::initializer_list<char const*>, std::allocator<char const*> const&) [62]
+                0.00    0.00      14/15          XLFunction::Declare(char const*, std::vector<char const*, std::allocator<char const*> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::vector<char const*, std::allocator<char const*> > const&) [64]
+                0.00    0.00       2/46          XLFunction::Declare(char const*, char const*, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::vector<char const*, std::allocator<char const*> > const&) [61]
+                0.00    0.00       2/10          XLFunction::Declare(char const*, char const*, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*) [65]
+                                  54             _sub_I_00100_0 [74]
+-----------------------------------------------
+                                  28             _sub_I_00100_0 [75]
+                0.00    0.00       1/1           _GLOBAL__sub_I__Z9to_stringB5cxx11PKwm [77]
+[75]     0.0    0.00    0.00       1+28      _sub_I_00100_0 [75]
+                0.00    0.00       8/10          XLFunction::Declare(char const*, char const*, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*) [65]
+                0.00    0.00       1/1           std::map<char, wchar_t, std::less<char>, std::allocator<std::pair<char const, wchar_t> > >::map(std::initializer_list<std::pair<char const, wchar_t> >, std::less<char> const&, std::allocator<std::pair<char const, wchar_t> > const&) [72]
+                0.00    0.00       1/35          std::vector<char const*, std::allocator<char const*> >::vector(std::initializer_list<char const*>, std::allocator<char const*> const&) [62]
+                0.00    0.00       1/15          XLFunction::Declare(char const*, std::vector<char const*, std::allocator<char const*> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::vector<char const*, std::allocator<char const*> > const&) [64]
+                                  28             _sub_I_00100_0 [75]
+-----------------------------------------------
+
+ This table describes the call tree of the program, and was sorted by
+ the total amount of time spent in each function and its children.
+
+ Each entry in this table consists of several lines.  The line with the
+ index number at the left hand margin lists the current function.
+ The lines above it list the functions that called this function,
+ and the lines below it list the functions this one called.
+ This line lists:
+     index	A unique number given to each element of the table.
+		Index numbers are sorted numerically.
+		The index number is printed next to every function name so
+		it is easier to look up where the function is in the table.
+
+     % time	This is the percentage of the `total' time that was spent
+		in this function and its children.  Note that due to
+		different viewpoints, functions excluded by options, etc,
+		these numbers will NOT add up to 100%.
+
+     self	This is the total amount of time spent in this function.
+
+     children	This is the total amount of time propagated into this
+		function by its children.
+
+     called	This is the number of times the function was called.
+		If the function called itself recursively, the number
+		only includes non-recursive calls, and is followed by
+		a `+' and the number of recursive calls.
+
+     name	The name of the current function.  The index number is
+		printed after it.  If the function is a member of a
+		cycle, the cycle number is printed between the
+		function's name and the index number.
+
+
+ For the function's parents, the fields have the following meanings:
+
+     self	This is the amount of time that was propagated directly
+		from the function into this parent.
+
+     children	This is the amount of time that was propagated from
+		the function's children into this parent.
+
+     called	This is the number of times this parent called the
+		function `/' the total number of times the function
+		was called.  Recursive calls to the function are not
+		included in the number after the `/'.
+
+     name	This is the name of the parent.  The parent's index
+		number is printed after it.  If the parent is a
+		member of a cycle, the cycle number is printed between
+		the name and the index number.
+
+ If the parents of the function cannot be determined, the word
+ `<spontaneous>' is printed in the `name' field, and all the other
+ fields are blank.
+
+ For the function's children, the fields have the following meanings:
+
+     self	This is the amount of time that was propagated directly
+		from the child into the function.
+
+     children	This is the amount of time that was propagated from the
+		child's children to the function.
+
+     called	This is the number of times the function called
+		this child `/' the total number of times the child
+		was called.  Recursive calls by the child are not
+		listed in the number after the `/'.
+
+     name	This is the name of the child.  The child's index
+		number is printed after it.  If the child is a
+		member of a cycle, the cycle number is printed
+		between the name and the index number.
+
+ If there are any cycles (circles) in the call graph, there is an
+ entry for the cycle-as-a-whole.  This entry shows who called the
+ cycle (as parents) and the members of the cycle (as children.)
+ The `+' recursive calls entry shows the number of function calls that
+ were internal to the cycle, and the calls entry for each member shows,
+ for that member, how many times it was called from other members of
+ the cycle.
+
+Copyright (C) 2012-2022 Free Software Foundation, Inc.
+
+Copying and distribution of this file, with or without modification,
+are permitted in any medium without royalty provided the copyright
+notice and this notice are preserved.
+
+Index by function name
+
+  [21] Bitness                 [4] scaled_normalised_black_and_ln_vega(double, double) [71] (anonymous namespace)::skip_path(char const*) (lets_be_rational_timing.cpp)
+   [8] Black                  [15] small_t_expansion_of_scaled_normalised_black(double, double) [72] std::map<char, wchar_t, std::less<char>, std::allocator<std::pair<char const, wchar_t> > >::map(std::initializer_list<std::pair<char const, wchar_t> >, std::less<char> const&, std::allocator<std::pair<char const, wchar_t> > const&)
+   [7] BlackAccuracyFactor     [5] asymptotic_expansion_of_scaled_normalised_black(double, double) [66] void std::vector<XLFunction, std::allocator<XLFunction> >::_M_realloc_insert<XLFunction>(__gnu_cxx::__normal_iterator<XLFunction*, std::vector<XLFunction, std::allocator<XLFunction> > >, XLFunction&&)
+  [22] BuildConfiguration     [11] normalised_black_with_optimal_use_of_codys_functions(double, double) [60] void std::vector<char const*, std::allocator<char const*> >::_M_realloc_insert<char const* const&>(__gnu_cxx::__normal_iterator<char const**, std::vector<char const*, std::allocator<char const*> > >, char const* const&)
+  [23] BuildDate              [19] Yprime(double)         [62] std::vector<char const*, std::allocator<char const*> >::vector(std::initializer_list<char const*>, std::allocator<char const*> const&)
+  [24] CPUName                [59] erfinv(double)         [67] std::vector<double, std::allocator<double> >::vector(unsigned long, std::allocator<double> const&)
+  [25] CompilerVersion        [16] convex_rational_cubic_control_parameter_to_fit_second_derivative_at_left_side(double, double, double, double, double, double, double, bool) [73] std::_Rb_tree<char, std::pair<char const, wchar_t>, std::_Select1st<std::pair<char const, wchar_t> >, std::less<char>, std::allocator<std::pair<char const, wchar_t> > >::_M_get_insert_unique_pos(char const&)
+  [26] DLLDirectory           [18] convex_rational_cubic_control_parameter_to_fit_second_derivative_at_right_side(double, double, double, double, double, double, double, bool) [63] std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > std::operator+<char, std::char_traits<char>, std::allocator<char> >(char, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+  [27] DLLName                [58] erf_cody(double)       [14] _init
+   [2] ImpliedBlackVolatility [12] erfc_cody(double)      [74] _sub_I_00100_0
+  [20] NormalisedBlack        [64] XLFunction::Declare(char const*, std::vector<char const*, std::allocator<char const*> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::vector<char const*, std::allocator<char const*> > const&) [75] _sub_I_00100_0 (lets_be_rational.cpp)
+  [28] Revision               [61] XLFunction::Declare(char const*, char const*, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::vector<char const*, std::allocator<char const*> > const&) [6] inverse_norm_cdf
+   [9] erfcx_cody(double)     [65] XLFunction::Declare(char const*, char const*, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*, char const*) [3] lets_be_rational
+  [10] normalised_black(double, double) [69] (anonymous namespace)::get_file_name() (dllmain.cpp) [1] main
+  [13] erfcx_cody_above_threshold(double) [68] (anonymous namespace)::this_file_name() (dllmain.cpp)
+  [17] rational_cubic_interpolation(double, double, double, double, double, double, double, double) [70] void (anonymous namespace)::free_xloper_content<XLOper12>(XLOper12*) (XLOper.cpp)

@@ -1,0 +1,69 @@
+%
+% Output on Windows 11 [64 bit RELEASE running on 12th Gen Intel(R) Core(TM) i5-12500H] compiled with MSVC 1936
+%
+%
+%	Comparison between analytical formula and numerical iterative algorithms (section 3.2).
+%	
+%	Using Let's Be Rational (via hand-written Octave interface).
+%	
+%	Loaded dynamic load library LetsBeRational.xll revision 1515 [64 bit RELEASE running on 12th Gen Intel(R) Core(TM) i5-12500H] compiled with MSVC 1936 on Tue Dec 19 14:43:21 2023 from .\x64 .
+%	
+%	Registered the following functions for autoloading from letsberational.oct by Octave:
+%	
+%	        Black()
+%	        CPUName()
+%	        ImpliedBlackVolatility()
+%	
+%	Configuration
+%	=============
+%	
+%	   CPU                                                                                                                  :  12th Gen Intel(R) Core(TM) i5-12500H
+%	   Matlab/GNU Octave?                                                                                                   :  GNU Octave 8.3.0
+%	   Using "Let's Be Rational"'s Black() function                                                                         :  True
+%	   Using "Let's Be Rational"'s ImpliedBlackVolatility() function                                                        :  True
+%	   Octave interface to "Let's Be Rational"'s functions (in LetsBeRational.xll)                                          :  hand-written
+%	   Using SWIG-generated Octave interface to "Let's Be Rational"'s functions                                             :  False
+%	   Keeping vectorised evaluation [where applicable, thus using 'European_call()' function in DBNR, (2), and (2)* method]:  True
+%	
+%	Preparing data for table 2 (page 15) and figure 8 (page 25) for 40 strikes, 40 times-to-expiry, and 40 input volatilities (64000 in total).
+%	
+%	Filtering option values below 1E-20...
+%	Retained 51321 option values.
+%	
+%	Beginning timing of DBNR method...
+%	Elapsed time is 68.9863 seconds. Average time for DBNR method per implied volatility calculation: 0.00134421 seconds.
+%	
+%	Beginning timing of Choi method...
+%	Elapsed time is 2.11885 seconds. Average time for Choi method per implied volatility calculation: 4.12862e-05 seconds.
+%	
+%	Timing trapezoidal integration evaluation of equation (2) via 'improved bound and epsilon'.
+%	Elapsed time is 27.2834 seconds. Average time for trapezoidal integration evaluation of equation (2) per implied volatility calculation: 0.000531623 seconds.
+%	
+%	Timing trapezoidal integration evaluation of equation (2) via 'naive bound and epsilon'.
+%	Elapsed time is 69.9046 seconds. Average time for trapezoidal integration evaluation of equation (2) per implied volatility calculation: 0.0013621 seconds.
+%	
+%	Timing 51321 implied volatility calculations with blsimpv() function provided by GNU Octave 8.3.0.
+%	Elapsed time is 540.184 seconds. Average time per implied volatility calculation: 0.0105256 seconds.
+%	
+%	Timing 51321 implied volatility calculations with Let's Be Rational function [looping, invoked in XLL].
+%	Elapsed time is 1.10978 seconds. Average time per implied volatility calculation: 2.16243e-05 seconds.
+%	
+%	40 x 40 x 40 => 64000, out of which 51321 option values above 1E-20
+%	
+%	Table 2:
+%	========
+%	Method                  Mean            Std.Dev.        Maximum         Minimum         time
+%	------------------------------------------------------------------------------------------------
+%	Formula (2)*            1.44E-01        2.20E-01        1.13E+00        6.46E-10        1.36E-03
+%	Formula (2)             3.10E-08        1.82E-07        4.01E-05        7.77E-16        5.32E-04
+%	DBNR                    3.10E-16        4.80E-16        1.59E-14        0.00E+00        1.34E-03
+%	Choi                    3.97E-16        6.96E-16        2.49E-14        0.00E+00        4.13E-05
+%	Dekker-Brent            1.18E-06        3.81E-07        1.40E-06        0.00E+00        1.05E-02
+%	Let's Be Rational       8.66E-17        9.20E-17        8.88E-16        0.00E+00        2.16E-05
+%	------------------------------------------------------------------------------------------------
+%	
+%	Preparing data for figure 9 (page 26) for 40 strikes, 40 times-to-expiry, and input volatility sigma = 0.2.
+%	
+%	Preparing data for figure 10 (page 26) for 40 strikes, 40 times-to-expiry, and input volatility sigma = 0.8.
+%	
+%	Total time: 748.429 seconds.

@@ -1,0 +1,229 @@
+
+letsberational_bprofiling	2097152	0 1e-14 1e-08 0.0001 0.001 0.01 0.05 0.1 0.25 0.5 1 2 4 8 16 32 64 128 256 512
+
+Loaded letsberational_bprofiling revision 1520 [64 bit RELEASE running on 12th Gen Intel(R) Core(TM) i5-12500H] compiled with GCC 11.4.0 on Feb 15 2024 22:50:14 from ./Linux/. .
+
+Average over 20 different values for x:  0.182789  microseconds per evaluation (41943040 successful evaluations in total).
+
+Total average |(attained accuracy)/(theoretically attainable accuracy)| : 0.195557.
+This means the method is on average 5.1 times more accurate than what one could
+hope for on the basis of first order error propagation analysis.
+
+Number of .text section executable locations recorded in bmon.out.0: 758
+Total number of sampling events recorded in bmon.out.0:              54515
+ 9460 (18.1%) sampling events in source file erf_cody.cpp
+31365 (59.8%) sampling events in source file lets_be_rational.cpp
+  282 ( 0.6%) sampling events in source file lets_be_rational_timing.cpp
+ 5175 ( 9.9%) sampling events in source file normaldistribution.cpp
+   39 ( 0.1%) sampling events in source file normaldistribution.h
+ 6130 (11.7%) sampling events in source file rationalcubic.cpp
+52451 total sampling events in above source files
+
+erf_cody.cpp.bprof
+ 467:   105 [ 0.21%]	    const double y_tilde = d_int(y * 16) / 16.0;
+ 470:     1 [ 0.01%]	    return exp(-y_tilde * y_tilde) * exp(-(y - y_tilde) * (y + y_tilde));
+ 488:   123 [ 0.24%]	  inline double AB(double z) { return ((((a[4] * z + a[0]) * z + a[1]) * z + a[2]) * z + a[3]) / ((((z + b[0]) * z + b[1]) * z + b[2]) * z + b[3]); }
+ 489:  3018 [ 5.76%]	  inline double CD(double y) { return ((((((((c[8] * y + c[0]) * y + c[1]) * y + c[2]) * y + c[3]) * y + c[4]) * y + c[5]) * y + c[6]) * y + c[7]) / ((((((((y + d[0]) * y + d[1]) * y + d[2]) * y + d[3]) * y + d[4]) * y + d[5]) * y + d[6]) * y + d[7]); }
+ 490:  1673 [ 3.19%]	  inline double PQ(double z) { return z * (((((p[5] * z + p[0]) * z + p[1]) * z + p[2]) * z + p[3]) * z + p[4]) / (((((z + q[0]) * z + q[1]) * z + q[2]) * z + q[3]) * z + q[4]); }
+ 564:    85 [ 0.17%]	double erfc_cody(double x) {
+ 566:     6 [ 0.02%]	  if (y <= THRESHOLD) //       |x| <= 0.46875
+ 567:   143 [ 0.28%]	    return 1 - x * AB(y * y);
+ 569:   509 [ 0.98%]	  double erfc_abs_x = (y >= XBIG) ? 0 /* when |x| ≥ 26.543 */ : ((y <= 4) ? CD(y) /* when 0.46875 < |x| <= 4.0 */ : (ONE_OVER_SQRT_PI - PQ(1 / (y * y))) / y /* when 4.0 < |x| < 26.543 */) * smoothened_exponential_of_negative_square(y);
+ 570:    41 [ 0.08%]	  return x < 0 ? 2 - erfc_abs_x : erfc_abs_x;
+ 571:    30 [ 0.06%]	}
+ 585:    14 [ 0.03%]	  if (y <= 4)    // 0.46875 < |x| <= 4.0
+ 586:   795 [ 1.52%]	    return CD(y);
+ 587:  1060 [ 2.03%]	  return (ONE_OVER_SQRT_PI - PQ(1 / (y * y))) / y;
+ 590:   266 [ 0.51%]	double erfcx_cody(double x) {
+ 591:   156 [ 0.30%]	  double y = fabs(x);
+ 592:   230 [ 0.44%]	  if (y <= THRESHOLD) { // |x| <= 0.46875
+ 593:     2 [ 0.01%]	    const double z = y * y;
+ 594:     3 [ 0.01%]	    return exp(z) * (1 - x * AB(z));
+ 596:    91 [ 0.18%]	  if (x < XNEG) //          x < -26.6287357137514
+ 597:   141 [ 0.27%]	    return DBL_MAX;
+ 599:   834 [ 1.60%]	  if (x < 0) {
+ 604:   134 [ 0.26%]	}
+
+lets_be_rational.cpp.bprof
+ 146:  2877 [ 5.49%]	  inline double householder3_factor(double ν, double h₂, double h₃) { return (1 + 0.5 * h₂ * ν) / (1 + ν * (h₂ + h₃ * ν * (1./6.))); }
+ 149:   234 [ 0.45%]	  inline double householder4_factor(double ν, double h₂, double h₃, double h₄) { return (1 + ν * (h₂ + ν * h₃ * (1./6.))) / (1 + ν * (1.5 * h₂ + ν * (h₂ * h₂ * 0.25 + h₃ * (1./3.) + ν * h₄ * (1./24.)))); }
+ 259:   620 [ 1.19%]	inline double square(const double x) { return x * x; }
+ 293:    55 [ 0.11%]	double asymptotic_expansion_of_scaled_normalised_black(double h, double t) {
+ 297:     2 [ 0.01%]	  const double e = square(t / h), r = (h + t) * (h - t), q = square(h / r);
+ 348:   230 [ 0.44%]	  switch (std::upper_bound(thresholds, thresholds + 12, -h - t + TAU + 0.5) - thresholds) {
+ 351:    23 [ 0.05%]	    case 2:  ω = q * (A14 + ω); [[fallthrough]];
+ 352:    98 [ 0.19%]	    case 3:  ω = q * (A13 + ω); [[fallthrough]];
+ 353:   115 [ 0.22%]	    case 4:  ω = q * (A12 + ω); [[fallthrough]];
+ 354:   160 [ 0.31%]	    case 5:  ω = q * (A11 + ω); [[fallthrough]];
+ 355:   255 [ 0.49%]	    case 6:  ω = q * (A10 + ω); [[fallthrough]];
+ 356:   409 [ 0.78%]	    case 7:  ω = q * (A9 + ω); [[fallthrough]];
+ 357:   658 [ 1.26%]	    case 8:  ω = q * (A8 + ω); [[fallthrough]];
+ 358:  1276 [ 2.44%]	    case 9:  ω = q * (A7 + ω); [[fallthrough]];
+ 359:   232 [ 0.45%]	    case 10:  ω = q * (A6 + ω); [[fallthrough]];
+ 360:   545 [ 1.04%]	    case 11:  ω = q * (A5 + ω); [[fallthrough]];
+ 361:  1592 [ 3.04%]	    default: ω = A0 + q * (A1 + q * (A2 + q * (A3 + q * (A4 + ω))));
+ 366:   281 [ 0.54%]	  const double bx = (t / r) * ω;
+ 368:   313 [ 0.60%]	}
+ 420:   239 [ 0.46%]	  return w * (-2.9999999999994663866 + w * (-1.7556263323542206288E2 + w * (-3.4735035445495633334E3 + w * (-2.7805745693864308643E4 + w * (-8.3836021460741980839E4 - 6.6818249032616849037E4 * w))))) / (1 + w * (6.3520877744831739102E1 + w * (1.4404389037604337538E3 + w * (1.4562545638507033944E4 + w * (6.6886794165651675684E4 + w * (1.2569970380923908488E5 + 6.9286518679803751694E4 * w))))));
+ 426:     8 [ 0.02%]	double Yprime(double h) {
+ 432:   128 [ 0.25%]	    return w * (1 + Yprime_tail_expansion_rational_function_part(w));
+ 434:     2 [ 0.01%]	  if (h <= -0.46875)
+ 436:    11 [ 0.03%]	    return (1.0000000000594317229 - h * (6.1911449879694112749E-1 - h * (2.2180844736576013957E-1 - h * (4.5650900351352987865E-2 - h * (5.545521007735379052E-3 - h * (3.0717392274913902347E-4 - h * (4.2766597835908713583E-8 + 8.4592436406580605619E-10 * h))))))) / (1 - h * (1.8724286369589162071 - h * (1.5685497236077651429 - h * (7.6576489836589035112E-1 - h * (2.3677701403094640361E-1 - h * (4.6762548903194957675E-2 - h * (5.5290453576936595892E-3 - 3.0822020417927147113E-4 * h)))))));
+ 438:    12 [ 0.03%]	}
+ 464:    13 [ 0.03%]	double small_t_expansion_of_scaled_normalised_black(double h, double t) {
+ 480:   408 [ 0.78%]	  return t * (B0 + t² * (B1 + t² * (B2 + t² * (B3 + t² * (B4 + t² * (B5 + B6 * t²))))));
+ 482:    66 [ 0.13%]	}
+ 520:    70 [ 0.14%]	double normalised_black_with_optimal_use_of_codys_functions(double θx, double s) {
+ 521:    56 [ 0.11%]	  const double codys_threshold = 0.46875, h = θx / s, t = 0.5 * s, q₁ = -(1 / SQRT_TWO) * (h + t), q₂ = -(1 / SQRT_TWO) * (h - t);
+ 524:    56 [ 0.11%]	  if (q₁ < codys_threshold)
+ 525:    12 [ 0.03%]	    if (q₂ < codys_threshold)
+ 526:     7 [ 0.02%]	      two_b = exp(0.5 * θx) * erfc_cody(q₁) - exp(-0.5 * θx) * erfc_cody(q₂);
+ 528:    73 [ 0.14%]	      two_b = exp(0.5 * θx) * erfc_cody(q₁) - exp(-0.5 * (h * h + t * t)) * erfcx_cody(q₂);
+ 530:     1 [ 0.01%]	    if (q₂ < codys_threshold)
+ 531:     1 [ 0.01%]	      two_b = exp(-0.5 * (h * h + t * t)) * erfcx_cody(q₁) - exp(-0.5 * θx) * erfc_cody(q₂);
+ 533:    14 [ 0.03%]	      two_b = exp(-0.5 * (h * h + t * t)) * (erfcx_cody(q₁) - erfcx_cody(q₂));
+ 534:    49 [ 0.10%]	  return std::max(0.5 * two_b, 0.0);
+ 535:    63 [ 0.13%]	}
+ 553:  1101 [ 2.10%]	  return (1 / SQRT_TWO_PI) * exp(-0.5 * (h * h + t * t));
+ 570:    15 [ 0.03%]	  const double h = x / s, t = 0.5 * s;
+ 571:   132 [ 0.26%]	  return SQRT_TWO_PI * exp(0.5 * (h * h + t * t));
+ 588:   719 [ 1.38%]	  return -(LN_TWO_PI * 0.5) - 0.5 * (h * h + t * t);
+ 597:     9 [ 0.02%]	double normalised_black(double θx, double s) {
+ 605:    10 [ 0.02%]	  if (IS_REGION_I(θx, s))
+ 607:    30 [ 0.06%]	  if (IS_REGION_II(θx, s))
+ 608:    11 [ 0.03%]	    return small_t_expansion_of_scaled_normalised_black(θx / s, 0.5 * s) * normalised_vega(θx, s);
+ 616:    15 [ 0.03%]	}
+ 619:   730 [ 1.40%]	std::tuple<double, double> scaled_normalised_black_and_ln_vega(double θx, double s) {
+ 627:   488 [ 0.94%]	  if (IS_REGION_I(θx, s))
+ 628:    86 [ 0.17%]	    return { asymptotic_expansion_of_scaled_normalised_black(θx / s, 0.5 * s), ln_normalised_vega(θx, s) };
+ 630:     8 [ 0.02%]	    return { small_t_expansion_of_scaled_normalised_black(θx / s, 0.5 * s), ln_normalised_vega(θx, s) };
+ 637:    12 [ 0.03%]	  return { normalised_black_with_optimal_use_of_codys_functions(θx, s) * exp(-ln_vega), ln_vega };
+ 639:    76 [ 0.15%]	}
+ 677:   177 [ 0.34%]	  const double ax = fabs(x), z = SQRT_ONE_OVER_THREE * ax / s, y = z * z, s2 = s * s, Phi = 0.5 * erfc_cody((1 / SQRT_TWO) * z) /* = norm_cdf(-z) */, phi = norm_pdf(z);
+ 678:   656 [ 1.26%]	  fpp = PI_OVER_SIX * y / (s2 * s) * Phi * (8 * SQRT_THREE * s * ax + (3 * s2 * (s2 - 8) - 8 * x * x) * Phi / phi) * exp(2 * y + 0.25 * s2);
+ 686:    11 [ 0.03%]	    const double Phi2 = Phi * Phi;
+ 687:   104 [ 0.20%]	    fp = TWO_PI * y * Phi2 * exp(y + 0.125 * s * s);
+ 704:   153 [ 0.30%]	  return fabs(x / (SQRT_THREE * inverse_norm_cdf(SQRT_THREE_OVER_THIRD_ROOT_TWO_PI * std::cbrt(f) / std::cbrt(fabs(x)))));
+ 731:    27 [ 0.06%]	  f = 0.5 * erfc_cody((0.5 / SQRT_TWO) * s) /* = norm_cdf(-0.5 * s) */;
+ 736:    44 [ 0.09%]	  fp = -0.5 * exp(0.5 * w);
+ 737:   160 [ 0.31%]	  fpp = SQRT_PI_OVER_TWO * exp(w + 0.125 * s * s) * w / s;
+ 791:     7 [ 0.02%]	  if (x < -1. / 5. || x > 1. / 3.)
+ 792:    79 [ 0.16%]	    return 1 - erfcx_cody(x);
+ 795:   125 [ 0.24%]	  return x * (1.128379167095512573896 - x * (1.0000000000000002 + x * (1.1514967181784756 + x * (5.7689001208873741E-1 + x * (1.4069188744609651E-1 + 1.4069285713634565E-2 * x)))) / (1 + x * (1.9037494962421563 + x * (1.5089908593742723 + x * (6.2486081658640257E-1 + x * (1.358008134514386E-1 + 1.2463320728346347E-2 * x))))));
+ 875:     2 [ 0.01%]	  if (s_c < 2.6267851073127395) {
+ 876:    28 [ 0.06%]	    if (s_c < 0.7099295739719539) {
+ 882:    17 [ 0.04%]	      const double g = (8.0741072372882856924E-2 + s_c * (9.8078911786358897272E-2 + s_c * (3.9760631445677058375E-2 + s_c * (5.9716928459589189876E-3 + s_c * (-6.4036399341479799981E-6 + 4.5425102093616062245E-7 * s_c))))) / (1 + s_c * (1.8594977672287664353 + s_c * (1.3658801475711790419 + s_c * (4.6132707108655653215E-1 + 6.1254597049831720643E-2 * s_c))));
+ 884:    23 [ 0.05%]	      return (s_c * s_c) * (0.07560996640296361767172 + s_c * (s_c * g - 0.09672719281339436290858));
+ 888:     9 [ 0.02%]	    return (1.9795737927598581235E-9 + s_c * (-2.7081288564685588037E-8 + s_c * (7.5610142272549044609E-2 + s_c * (6.917130174466834016E-2 + s_c * (2.9537058950963019803E-2 + s_c * (6.5849252702302307774E-3 + 6.9711400639834715731E-4 * s_c)))))) / (1 + s_c * (2.1941448525586579756 + s_c * (2.1297103549995181357 + s_c * (1.1571483187179784072 + s_c * (3.7831622253060456794E-1 + s_c * (7.1714862448829349869E-2 + 6.6361975827861200167E-3 * s_c))))));
+ 890:    15 [ 0.03%]	  if (s_c < 7.348469228349534)
+ 893:    16 [ 0.04%]	    return (-9.3325115354837883291E-5 + s_c * (5.3118033972794648837E-4 + s_c * (7.4114855448345002595E-2 + s_c * (7.4039658186822817454E-2 + s_c * (3.9225177407687604785E-2 + s_c * (1.0022913378254090083E-2 + 1.7012579407246055469E-3 * s_c)))))) / (1 + s_c * (2.2217238132228132256 + s_c * (2.3441816707087403282 + s_c * (1.3912323646271141826 + s_c * (5.3231258443501838354E-1 + s_c * (1.1744005919716101572E-1 + 1.6195405895930935811E-2 * s_c))))));
+ 904:    25 [ 0.05%]	  return (1.4500072297240603183E-3 + s_c * (-1.5116692485011195757E-3 + s_c * (7.1682178310936334831E-2 + s_c * (3.921610857820463493E-2 + s_c * (2.9342405658628443931E-2 + s_c * (5.1832526171631521426E-3 + 1.6930208078421474854E-3 * s_c)))))) / (1 + s_c * (1.6176313502305414664 + s_c * (1.6823159175281531664 + s_c * (8.4878307567372222113E-1 + s_c * (3.7543742137375791321E-1 + s_c * (7.126137099644302999E-2 + 1.6116992546788676159E-2 * s_c))))));
+ 948:     8 [ 0.02%]	  if (s_c < 1.7888543819998317) {
+ 955:    27 [ 0.06%]	      const double g = (-6.063099881233561706E-2 + s_c * (-8.1011946637120604985E-2 + s_c * (-4.2505564862438753828E-2 + s_c * (-8.9880000946868691788E-3 + s_c * (-7.5603072110443268356E-6 + 4.3879556621540147458E-7 * s_c))))) / (1 + s_c * (1.8400371530721828756 + s_c * (1.5709283443886143691 + s_c * (6.8913245453611400484E-1 + 1.4703173061720980923E-1 * s_c))));
+ 957:     4 [ 0.01%]	      return 0.7899085945560627246288 + (s_c * s_c) * (0.0614616805805147403487 + s_c * g);
+ 961:    13 [ 0.03%]	    return (7.8990944435755287611E-1 + s_c * (-1.2655410534988972886 + s_c * (-2.8803040699221003256 + s_c * (-2.6936198689113258727 + s_c * (-1.1213067281643205754 + s_c * (-2.1277793801691629892E-1 + 5.1486445905299802703E-6 * s_c)))))) / (1 + s_c * (-1.6021222722060444448 + s_c * (-3.7242680976480704555 + s_c * (-3.2083117718907365085 + s_c * (-1.2922333835930958583 - 2.3762328334050001161E-1 * s_c)))));
+ 966:    15 [ 0.03%]	    return (7.8990640048967596475E-1 + s_c * (1.5993699253596663678 + s_c * (1.6481729039140370242 + s_c * (9.8227188109869200166E-1 + s_c * (3.6313557966186936883E-1 + s_c * (7.8277036261179606301E-2 + 9.3404307364538726214E-3 * s_c)))))) / (1 + s_c * (2.0247407005640401446 + s_c * (2.0087454279103740489 + s_c * (1.1627561803056961973 + s_c * (4.2004672123723823581E-1 + s_c * (8.9130862793887234546E-2 + 1.0436767768858021717E-2 * s_c))))));
+ 977:    19 [ 0.04%]	  return (7.91133825948419359E-1 + s_c * (1.24653733210880042 + s_c * (1.32747426980537386 + s_c * (6.95009705717846778E-1 + s_c * (3.05965944268228457E-1 + s_c * (6.02200363391352887E-2 + 1.29050244454344842E-2 * s_c)))))) / (1 + s_c * (1.58117486714634672 + s_c * (1.60144713247629644 + s_c * (8.30040185836882436E-1 + s_c * (3.53071863813401531E-1 + s_c * (6.95901684131758475E-2 + 1.44197580643890011E-2 * s_c))))));
+1086:   182 [ 0.35%]	extern "C" DLL_EXPORT double lets_be_rational(double 𝛽, double θx, int N) {
+1088:    11 [ 0.03%]	  if (𝛽 <= 0)
+1094:     1 [ 0.01%]	  const double bₘₐₓ = exp(0.5 * θx);
+1096:     2 [ 0.01%]	    return implied_volatility_output(0, VOLATILITY_VALUE_TO_SIGNAL_PRICE_IS_ABOVE_MAXIMUM);
+1100:   115 [ 0.22%]	  if (0 == θx) return implied_normalised_volatility_atm(𝛽);
+1102:    78 [ 0.15%]	  int iterations = 0;
+1129:    73 [ 0.14%]	  const double sqrt_ax = sqrt(-θx), s_c = SQRT_TWO * sqrt_ax, ome = one_minus_erfcx(sqrt_ax), b_c = 0.5 * bₘₐₓ * ome;
+1131:   135 [ 0.26%]	  if (𝛽 < b_c) {   // LOWER HALF: s < s_c
+1146:     3 [ 0.01%]	    const double bₗ = bₗ_over_bₘₐₓ(s_c) * bₘₐₓ;
+1150:     1 [ 0.01%]	    if (𝛽 < bₗ) {   // LOWEST BRANCH:   s < sₗ
+1154:    42 [ 0.09%]	        const double rₗₗ = convex_rational_cubic_control_parameter_to_fit_second_derivative_at_right_side(0., bₗ, 0., f_lower_map_l, 1., d_f_lower_map_l_d_beta, d2_f_lower_map_l_d_beta2, true);
+1155:    97 [ 0.19%]	        f = rational_cubic_interpolation(𝛽, 0., bₗ, 0., f_lower_map_l, 1., d_f_lower_map_l_d_beta, rₗₗ);
+1156:   100 [ 0.20%]	        if (!(f > 0)) { // This can happen due to roundoff truncation for extreme values such as |x|>500.
+1187:   640 [ 1.23%]	      const double ln_𝛽 = log(𝛽);
+1188:   638 [ 1.22%]	      for (; iterations<N && fabs(ds)>DBL_EPSILON * s; ++iterations) {
+1211:    81 [ 0.16%]	        const auto [bx, ln_vega] = scaled_normalised_black_and_ln_vega(θx, s);
+1216:   542 [ 1.04%]	        const double ln_b = log(bx) + ln_vega, bpob = 1 / bx;
+1228:  2343 [ 4.47%]	          const double h = θx / s, x²_over_s³ = h * h / s, b_h₂ = x²_over_s³ - s / 4, ν = (ln_𝛽 - ln_b) * ln_b / ln_𝛽 / bpob, λ = 1 / ln_b, otλ = 1 + 2 * λ, h₂ = b_h₂ - bpob * otλ, c = 3 * (x²_over_s³ / s) /* = (h/s)² */;
+1229:   678 [ 1.30%]	          const double b_h₃ = b_h₂ * b_h₂ - c - 0.25, sq_bpob = bpob * bpob, bppob = b_h₂ * bpob, μ = 6 * λ * (1 + λ), h₃ = b_h₃ + sq_bpob * (2 + μ) - bppob * 3 * otλ;
+1237:   250 [ 0.48%]	          if (θx < -190) {
+1240:   162 [ 0.31%]	            ds = ν * householder_factor(ν, h₂, h₃, (b_h₂ * (b_h₃ - 0.5) - (b_h₂ - 2 / s) * 2 * c) - bpob * (sq_bpob * (6 + λ * (22 + λ * (36 + λ * 24))) - bppob * (12 + 6 * μ)) - bppob * b_h₂ * 3 * otλ - b_h₃ * bpob * 4 * otλ);
+1242:  1090 [ 2.08%]	            ds = ν * householder_factor(ν, h₂, h₃);
+1248:   360 [ 0.69%]	        s += ds;
+1254:     1 [ 0.01%]	      const double inv_v_c = SQRT_TWO_PI / bₘₐₓ;  // v_c = bₘₐₓ * (1 / SQRT_TWO_PI)
+1256:     1 [ 0.01%]	      s = rational_cubic_interpolation(𝛽, bₗ, b_c, sₗ, s_c, inv_vₗ, inv_v_c, rₗₘ);
+1281:    58 [ 0.12%]	    const double sᵤ = s_c + SQRT_PI_OVER_TWO * (2 - ome); // = s_c + (bₘₐₓ - b_c) / v_c    ---     ome  =  1 - erfcx(√|x|)
+1285:    47 [ 0.09%]	    const double bᵤ = bᵤ_over_bₘₐₓ(s_c) * bₘₐₓ;
+1289:    82 [ 0.16%]	    if (𝛽 <= bᵤ) { // UPPER MIDDLE:  s_c ≤ s ≤ sᵤ
+1291:    26 [ 0.05%]	      const double inv_v_c = SQRT_TWO_PI / bₘₐₓ;  // v_c = bₘₐₓ * (1 / SQRT_TWO_PI)
+1293:    17 [ 0.04%]	      const double inv_vᵤ = inv_normalised_vega(θx, sᵤ), rᵤₘ = convex_rational_cubic_control_parameter_to_fit_second_derivative_at_left_side(b_c, bᵤ, s_c, sᵤ, inv_v_c, inv_vᵤ, 0.0, false);
+1294:    25 [ 0.05%]	      s = rational_cubic_interpolation(𝛽, b_c, bᵤ, s_c, sᵤ, inv_v_c, inv_vᵤ, rᵤₘ);
+1304:     3 [ 0.01%]	      if (d2_f_upper_map_h_d_beta2 > -SQRT_DBL_MAX && d2_f_upper_map_h_d_beta2 < SQRT_DBL_MAX) {
+1305:    35 [ 0.07%]	        const double rᵤᵤ = convex_rational_cubic_control_parameter_to_fit_second_derivative_at_left_side(bᵤ, bₘₐₓ, f_upper_map_h, 0., d_f_upper_map_h_d_beta, -0.5, d2_f_upper_map_h_d_beta2, true);
+1306:    99 [ 0.19%]	        f = rational_cubic_interpolation(𝛽, bᵤ, bₘₐₓ, f_upper_map_h, 0., d_f_upper_map_h_d_beta, -0.5, rᵤᵤ);
+1308:    82 [ 0.16%]	      if (f <= 0) {
+1309:     1 [ 0.01%]	        const double h = bₘₐₓ - bᵤ, t = (𝛽 - bᵤ) / h;
+1310:    38 [ 0.08%]	        f = (f_upper_map_h * (1 - t) + 0.5 * h * t) * (1 - t); // We switch to quadratic interpolation using f(bᵤ), f(bₘₐₓ)≡0, and f'(bₘₐₓ)≡-1/2 to specify the quadratic.
+1317:   174 [ 0.34%]	      if (𝛽 > 0.5 * bₘₐₓ) { // Else we better drop through and let the objective function be g(s) = b(θx,s)-𝛽. 
+1344:  1003 [ 1.92%]	        for (; iterations<N && fabs(ds)>DBL_EPSILON * s; ++iterations) {
+1376:  1823 [ 3.48%]	          const double h = θx / s, t = s / 2, gp /* = bp / b_bar */ = (2 / SQRT_TWO_PI) / (erfcx_cody((t + h) * (1 / SQRT_TWO)) + erfcx_cody((t - h) * (1 / SQRT_TWO))), b_bar = normalised_vega(θx, s) / gp;
+1443:   332 [ 0.64%]	            const double g = log(𝛽_bar / b_bar), x²_over_s³ = (h * h) / s, b_h₂ = x²_over_s³ - s / 4, c = 3 * (x²_over_s³ / s) /* = (h/s)² */, b_h₃ = b_h₂ * b_h₂ - c - 0.25;
+1444:    86 [ 0.17%]	            const double ν = -g / gp, h₂ = b_h₂ + gp, h₃ = b_h₃ + gp * (2 * gp + 3 * b_h₂);
+1451:  1026 [ 1.96%]	            if (θx < -580) {
+1483:   131 [ 0.25%]	  for (; iterations<N && fabs(ds)>DBL_EPSILON * s; ++iterations) {
+1504:    46 [ 0.09%]	    const double b = normalised_black(θx, s), inv_bp = inv_normalised_vega(θx, s), ν = (𝛽 - b) * inv_bp, h = θx / s, x²_over_s³ = (h * h) / s, h₂ = x²_over_s³ - s * 0.25, h₃ = h₂ * h₂ - 3 * (x²_over_s³ / s) /* = (h/s)² */ - 0.25;
+1508:   170 [ 0.33%]	    ds = ν * householder_factor(ν, h₂, h₃);
+1513:    55 [ 0.11%]	    s += ds;
+1518:   221 [ 0.43%]	}
+1545:   190 [ 0.37%]	double ImpliedBlackVolatility(double price, double F, double K, double T, double θ /* θ=±1 */) {
+1547:     1 [ 0.01%]	    return implied_volatility_output(0, VOLATILITY_VALUE_TO_SIGNAL_PRICE_IS_ABOVE_MAXIMUM);
+1549:   151 [ 0.29%]	  return lets_be_rational((μ > 0 ? price - μ : price) / (sqrt(F) * sqrt(K)), -fabs(log(F / K)), IMPLIED_VOLATILITY_MAXIMUM_ITERATIONS) / sqrt(T);
+1550:  1347 [ 2.57%]	}
+
+lets_be_rational_timing.cpp.bprof
+ 120:    87 [ 0.17%]	    for (int i = ibegin; i <= iend; ++i)
+ 121:   195 [ 0.38%]	      sigma_output[i] = ImpliedBlackVolatility(price[i], F, K, T, call_put);
+
+normaldistribution.cpp.bprof
+ 213:   174 [ 0.34%]	  const double r = sqrt(-log(p));
+ 215:  1495 [ 2.86%]	  if (r < 6.7)
+ 218:    82 [ 0.16%]	        return (3.691562302945566191 + r * (4.7170590600740689449E1 + r * (6.5451292110261454609E1 + r * (-7.4594687726045926821E1 + r * (-8.3383894003636969722E1 - 1.3054072340494093704E1 * r))))) / (1 + r * (2.0837211328697753726E1 + r * (7.1813812182579255459E1 + r * (5.9270122556046077717E1 + r * (9.2216887978737432303 + 1.8295174852053530579E-4 * r)))));
+ 220:   329 [ 0.63%]	        return (3.2340179116317970288 + r * (1.449177828689122096E1 + r * (6.8397370256591532878E-1 + r * (-1.81254427791789183E1 + r * (-1.005916339568646151E1 - 1.2013147879435525574E0 * r))))) / (1 + r * (8.8820931773304337525 + r * (1.4656370665176799712E1 + r * (7.1369811056109768745 + r * (8.4884892199149255469E-1 + 1.0957576098829595323E-5 * r)))));
+ 222:   984 [ 1.88%]	      return (3.1252235780087584807 + r * (9.9483724317036560676 + r * (-5.1633929115525534628 + r * (-1.1070534689309368061E1 + r * (-2.8699061335882526744 - 1.5414319494013597492E-1 * r))))) / (1 + r * (7.076769154309171622 + r * (8.1086341122361532407 + r * (2.0307076064309043613 + r * (1.0897972234131828901E-1 + 1.3565983564441297634E-7 * r)))));
+ 225:  1063 [ 2.03%]	      return (2.6161264950897283681 + r * (2.250881388987032271 + r * (-3.688196041019692267 + r * (-2.9644251353150605663 + r * (-4.7595169546783216436E-1 - 1.612303318390145052E-2 * r))))) / (1 + r * (3.2517455169035921495 + r * (2.1282030272153188194 + r * (3.3663746405626400164E-1 + r * (1.1400087282177594359E-2 + 3.0848093570966787291E-9 * r)))));
+ 227:   549 [ 1.05%]	      return (2.3226849047872302955 + r * (-4.2799650734502094297E-2 + r * (-2.5894451568465728432 + r * (-8.6385181219213758847E-1 + r * (-6.5127593753781672404E-2 - 1.0566357727202585402E-3 * r))))) / (1 + r * (1.9361316119254412206 + r * (6.1320841329197493341E-1 + r * (4.6054974512474443189E-2 + r * (7.471447992167225483E-4 + 2.3135343206304887818E-11 * r)))));
+ 245:     1 [ 0.01%]	  const double s = uₘₐₓ * uₘₐₓ - u * u;
+ 246:     9 [ 0.02%]	  return u * ((2.92958954698308805 + s * (5.0260572167303103E1 + s * (3.01870541922933937E2 + s * (7.4997781456657924E2 + s * (6.90489242061408612E2 + s * (1.34233243502653864E2 - 7.58939881401259242 * s)))))) / (1 + s * (1.8918538074574598E1 + s * (1.29404120448755281E2 + s * (3.86821208540417453E2 + s * (4.79123914509756757E2 + 1.79227008508102628E2 * s))))));
+ 250:   180 [ 0.35%]	double inverse_norm_cdf(double p) {
+ 252:   276 [ 0.53%]	  if (fabs(u) < uₘₐₓ)
+ 255:     7 [ 0.02%]	  return u > 0 ? -inverse_norm_cdf_for_low_probabilities(1 - p) : inverse_norm_cdf_for_low_probabilities(p);
+ 256:     1 [ 0.01%]	}
+ 259:     8 [ 0.02%]	double erfinv(double 𝑒) {
+ 265:     1 [ 0.01%]	  return (𝑒 < 0 ? inverse_norm_cdf_for_low_probabilities(0.5 * 𝑒 + 0.5) : -inverse_norm_cdf_for_low_probabilities(-0.5 * 𝑒 + 0.5)) * (1 / SQRT_TWO);
+ 266:    16 [ 0.04%]	}
+
+normaldistribution.h.bprof
+  32:    39 [ 0.08%]	inline double norm_pdf(double x) { return (1 / SQRT_TWO_PI) * exp(-.5 * x * x); }
+
+rationalcubic.cpp.bprof
+  36:   116 [ 0.23%]	  inline bool is_zero(double x) { return fabs(x) < DBL_MIN; }
+  39:   124 [ 0.24%]	double rational_cubic_interpolation(double x, double x_l, double x_r, double y_l, double y_r, double d_l, double d_r, double r) {
+  46:   164 [ 0.32%]	    const double t = (x - x_l) / h, omt = 1 - t, t2 = t * t, omt2 = omt * omt;
+  48:  2230 [ 4.26%]	    return (y_r * t2 * t + (r * y_r - h * d_r) * t2 * omt + (r * y_l + h * d_l) * t * omt2 + y_l * omt2 * omt) / (1 + (r - 3) * t * omt);
+  58:    17 [ 0.04%]	  const double h = (x_r - x_l), numerator = 0.5 * h * second_derivative_l + (d_r - d_l);
+  63:    24 [ 0.05%]	  const double denominator = (y_r - y_l) / h - d_l;
+  64:   128 [ 0.25%]	  if (is_zero(denominator))
+  66:   478 [ 0.92%]	  return numerator / denominator;
+  76:   129 [ 0.25%]	  if (is_zero(denominator))
+  78:   533 [ 1.02%]	  return numerator / denominator;
+  82:   174 [ 0.34%]	  const bool monotonic = d_l * s >= 0 && d_r * s >= 0, convex = d_l <= s && s <= d_r, concave = d_l >= s && s >= d_r;
+  86:    45 [ 0.09%]	  double r1 = -DBL_MAX, r2 = r1;
+  89:    38 [ 0.08%]	    if (!is_zero(s)) // (3.8), avoiding division by zero.
+  90:   170 [ 0.33%]	      r1 = (d_r + d_l) / s; // (3.8)
+  94:    50 [ 0.10%]	  if (convex || concave) {
+  95:     4 [ 0.01%]	    if (!(is_zero(s_m_d_l) || is_zero(d_r_m_s))) // (3.18), avoiding division by zero.
+  96:  1075 [ 2.05%]	      r2 = std::max(fabs(d_r_m_d_l / d_r_m_s), fabs(d_r_m_d_l / s_m_d_l));
+ 100:     2 [ 0.01%]	    r2 = maximum_rational_cubic_control_parameter_value; // This enforces linear interpolation along segments that are inconsistent with the slopes on the boundaries, e.g., a perfectly horizontal segment that has negative slopes on either edge.
+ 101:    93 [ 0.18%]	  return std::max(minimum_rational_cubic_control_parameter_value, std::max(r1, r2));
+ 104:    72 [ 0.14%]	double convex_rational_cubic_control_parameter_to_fit_second_derivative_at_left_side(double x_l, double x_r, double y_l, double y_r, double d_l, double d_r, double second_derivative_l, bool preferShapePreservationOverSmoothness) {
+ 107:     7 [ 0.02%]	  return std::max(r, r_min);
+ 108:   160 [ 0.31%]	}
+ 110:   106 [ 0.21%]	double convex_rational_cubic_control_parameter_to_fit_second_derivative_at_right_side(double x_l, double x_r, double y_l, double y_r, double d_l, double d_r, double second_derivative_r, bool preferShapePreservationOverSmoothness) {
+ 114:   191 [ 0.37%]	}

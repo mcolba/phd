@@ -1,0 +1,362 @@
+   1:     .         	#include <math.h>
+   2:     .         	#include <climits>
+   3:     .         	#include <float.h>
+   4:     .         	#include <vector>
+   5:     .         	#include <time.h>
+   6:     .         	#include <stdio.h>
+   7:     .         	
+   8:     .         	#include "lets_be_rational.h"
+   9:     .         	
+  10:     .         	#if defined(_MSC_VER)
+  11:     .         	# pragma warning (disable : 26451)
+  12:     .         	#endif
+  13:     .         	
+  14:     .         	#include <cstring> // for strrchr()
+  15:     .         	
+  16:     .         	namespace { const char* skip_path(const char* file_name) { return (const char*)std::max((uintptr_t)file_name, std::max((uintptr_t)strrchr(file_name, '/'), (uintptr_t)strrchr(file_name, '\\')) + 1); } }
+  17:     .         	
+  18:     .         	// Compile with:
+  19:     .         	//                f=lets_be_rational_timing; g++ -DNDEBUG -Ofast $f.cpp -o Linux/$f -s -Wl,-rpath=. -L./Linux -l:LetsBeRational.so
+  20:     .         	// or
+  21:     .         	//                f=lets_be_rational_timing; g++ -DNDEBUG -Ofast $f.cpp -o x64/$f   -s -Wl,-rpath=. -L./Linux -l:LetsBeRational.xll
+  22:     .         	
+  23:     .         	//
+  24:     .         	//  x = ln(F/K)
+  25:     .         	//
+  26:     .         	//  β = price / √(F·K)
+  27:     .         	//
+  28:     .         	//  Thus, when F = 1, we have K = exp(-x) and
+  29:     .         	//
+  30:     .         	//     β = price · exp(x/2)
+  31:     .         	//     price = β · exp(-x/2)
+  32:     .         	//     price = β · √K
+  33:     .         	//
+  34:     .         	// Invocation example:
+  35:     .         	//
+  36:     .         	//   ./letsbe_rational_timing  2097152  0 1E-14 1E-8 1E-4 0.001 0.01 0.05 0.1 0.25 0.5 1 2 4 8 16 32 64 128 256 512
+  37:     .         	//
+  38:     .         	
+  39:     .         	#define NO_PREMAPPING_OF_VOLATILITIES
+  40:     .         	
+  41:     .         	#if defined( HAVE_BPROF )
+  42:     .         	extern "C" void bprof_start();
+  43:     .         	extern "C" void bprof_stop();
+  44:     .         	#else
+  45:     .         	#define bprof_start()
+  46:     .         	#define bprof_stop()
+  47:     .         	#endif
+  48:     .         	
+  49:     .         	#if defined(_POSIX_C_SOURCE) && (_POSIX_C_SOURCE >= 199309L) && !defined( USE_ELAPSED_CLOCK_TIME_FOR_TIMING )
+  50:     .         	#define GET_CLOCK( CLOCK_VAR_NAME ) timespec CLOCK_VAR_NAME; clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &CLOCK_VAR_NAME)
+  51:     .         	#define MICROSECONDS_BETWEEN_CLOCKS( START, END ) ((END.tv_sec - START.tv_sec) * 1E6 + (END.tv_nsec - START.tv_nsec) * 1E-3)
+  52:     .         	#else
+  53:     .         	#define GET_CLOCK( CLOCK_VAR_NAME ) const clock_t CLOCK_VAR_NAME = clock();
+  54:     .         	#define MICROSECONDS_BETWEEN_CLOCKS( START, END ) ((END - START) / ((double)CLOCKS_PER_SEC) * 1000000)
+  55:     .         	#endif
+  56:     .         	
+  57:     .         	int main(int argc, char** argv) {
+  58:     .         	  bprof_stop();
+  59:     .         	  if (argc < 3) {
+  60:     .         	    fprintf(stderr, "Usage: %s <number_of_points> <x> [ <x2> <x3> ...]\n", skip_path(argv[0]));
+  61:     .         	    fprintf(stderr, "\nInvocation example:\n\n   %s   2097152  0 1E-14 1E-8 1E-4 0.001 0.01 0.05 0.1 0.25 0.5 1 2 4 8 16 32 64 128 256 512\n\n", skip_path(argv[0]));
+  62:     .         	    fflush(stderr);
+  63:     .         	    return -1;
+  64:     .         	  }
+  65:     .         	  const int m = std::max((int)strtod(argv[1], 0), 4), m1 = m / 2;
+  66:     .         	  std::vector<double> x_values(argc - 2), s(m), price(m), sigma_input(m), sigma_output(m);
+  67:     .         	  for (int i_arg = 2; i_arg < argc; ++i_arg) x_values[(size_t)i_arg - 2] = strtod(argv[i_arg], 0);
+  68:     .         	  printf("\n%s\t%d\t%g", skip_path(argv[0]), m, x_values[0]);
+  69:     .         	  for (int i_arg = 3; i_arg < argc; ++i_arg) printf(" %g", x_values[(size_t)i_arg - 2]);
+  70:     .         	  printf("\n");
+  71:     .         	  printf("\nLoaded %s revision %d [%d bit %s running on %s] compiled with %s on %s from %s .\n\n", DLLName(), Revision(), Bitness(), BuildConfiguration(), CPUName(), CompilerVersion(), BuildDate(), DLLDirectory());
+  72:     .         	  fflush(stdout);
+  73:     .         	  // When denormalized (aka 'subnormal) numbers are automatically 'flushed to zero', the minimum price that we can reliably reproduce (e.g., for x=-1E-8) is 2·DBL_MIN due to the first iteration (from DBL_MIN or nearby)
+  74:     .         	  // slightly going too far, i.e., ever so slightly below (normalised_black = ) DBL_MIN, and then converges in a much smaller step back. This works fine if the platform is happy with denormalized (subnormal) numbers,
+  75:     .         	  // i.e., numbers between DBL_TRUE_MIN and DBL_MIN. The gcc/g++ compiler, however, is best optimised with settings that map all numbers below DBL_MIN to zero, whence, we cannot use DBL_MIN as an input price with g++.
+  76:     .         	  // When compiling with MSVC with the settings in this 'solution' ['LetsBeRational (Visual Studio 2022).sln'], where we do have access to numbers between DBL_TRUE_MIN and DBL_MIN, then we can use DBL_MIN as a target
+  77:     .         	  // (normalised) Black function price, and then this test here works fine (e.g., when x=-1E-8), but not with g++. Note: DBL_TRUE_MIN = DBL_MIN·DBL_EPSILON. To cater for all cases, we set 𝛽_min := 2·DBL_MIN.
+  78:     .         	  double total_elapsed_μsec = 0, total_rel_sum = 0;
+  79:     .         	  size_t total_evaluation_count = 0, total_success_count = 0;
+  80:     .         	  for (const auto x_val : x_values) {
+  81:     .         	    const double x = -fabs(x_val), F = 1, K = F * exp(-x), sqrt_FK = sqrt(F) * sqrt(K), T = 1, sqrt_T = sqrt(T), call_put = 1;
+  82:     .         	    const double s_mid = sqrt(std::max(2 * fabs(x), DBL_EPSILON)), beta_mid = NormalisedBlack(x, s_mid, call_put);
+  83:     .         	    double beta_min, min_price = 0, beta_max, max_price, s_min = 0, s_max = DBL_MAX;
+  84:     .         	    for (unsigned int i = 1; i < USHRT_MAX && (s_min <= DBL_MIN || min_price < DBL_MIN); ++i) {
+  85:     .         	      beta_min = i * DBL_MIN;
+  86:     .         	      s_min = ImpliedBlackVolatility(beta_min * sqrt_FK, F, K, T, call_put) * sqrt_T;
+  87:     .         	      min_price = Black(F, K, s_min / sqrt_T, T, call_put);
+  88:     .         	      if (min_price >= DBL_MIN && s_min > DBL_MIN)
+  89:     .         	        s_min = ImpliedBlackVolatility(min_price, F, K, T, call_put) * sqrt_T;
+  90:     .         	    }
+  91:     .         	    for (unsigned int i = 1; i < INT_MAX && s_max >= DBL_MAX; ++i){
+  92:     .         	      beta_max = exp(x / 2) * (1 - i * DBL_EPSILON);
+  93:     .         	      max_price = beta_max * sqrt_FK;
+  94:     .         	      s_max = ImpliedBlackVolatility(max_price, F, K, T, call_put) * sqrt_T;
+  95:     .         	    }
+  96:     .         	    const double log_beta_min = log(beta_min), d_logb = (log(beta_mid) - log_beta_min) / (m1 - 1), ds = (s_max - s_mid) / (m - m1);
+  97:     .         	    for (int i = 0; i < m1; ++i)
+  98:     .         	      // We ensure that the very first price used here is exactly equal to beta_min since we previously asserted that beta_min leads to a positive s_min.
+  99:     .         	      s[i] = ImpliedBlackVolatility(beta_min * exp(i * d_logb) * sqrt_FK, F, K, T, call_put) * sqrt_T;
+ 100:     .         	    for (int i = m1; i < m; ++i)
+ 101:     .         	      s[i] = s_mid + (i - m1 + 1) * ds;
+ 102:     .         	    for (int i = 0; i < m; ++i) {
+ 103:     .         	      price[i] = Black(F, K, sigma_input[i] = s[i] / sqrt_T, T, call_put);
+ 104:     .         	      if (price[i] <= 0) {
+ 105:     .         	        printf("%d: Black(%.17g,%.17g,%.17g,%.17g,%.17g) returned %g.\n", i,  F, K, sigma_input[i], T, call_put, price[i]);
+ 106:     .         	        fflush(stdout);
+ 107:     .         	      }
+ 108:     .         	#if !defined( NO_PREMAPPING_OF_VOLATILITIES )
+ 109:     .         	      sigma_input[i] = ImpliedBlackVolatility(price[i], F, K, T, call);
+ 110:     .         	#endif
+ 111:     .         	    }
+ 112:     .         	    printf("#\n# |x|=%.16g\tnumber_of_points=%d\tbeta_min=%g\tbeta_mid=%g\tbeta_max=%s%G\ts_min=%g\ts_mid=%g\ts_max=%g\n", fabs(x), m, beta_min, beta_mid, (fabs(x)<1E-4?(beta_max<1?"1-":beta_max>1?"1+":""):""),(fabs(x)<1E-4?(1==beta_max?beta_max:fabs(1-beta_max)):beta_max), s[0], s[(size_t)m1 - 1], s[(size_t)m - 1]);
+ 113:     .         	    fflush(stdout);
+ 114:     .         	    int ibegin, iend;
+ 115:     .         	    for (ibegin = 0; ibegin < m && (price[ibegin] <= 0 || sigma_input[ibegin] <= 0); ++ibegin);
+ 116:     .         	    for (iend = m - 1; iend >= 0 && (price[iend] >= F || sigma_input[iend] >= DBL_MAX); --iend);
+ 117:     .         	
+ 118:     .         	    GET_CLOCK(start_clock);
+ 119:     .         	    bprof_start();
+ 120:    87 [ 0.17%]	    for (int i = ibegin; i <= iend; ++i)
+ 121:   195 [ 0.38%]	      sigma_output[i] = ImpliedBlackVolatility(price[i], F, K, T, call_put);
+ 122:     .         	    bprof_stop();
+ 123:     .         	    GET_CLOCK(end_clock);
+ 124:     .         	
+ 125:     .         	    const double elapsed_μsec = MICROSECONDS_BETWEEN_CLOCKS(start_clock, end_clock);
+ 126:     .         	
+ 127:     .         	    double sum = 0, rel_sum = 0;
+ 128:     .         	    int evaluation_count = 0, success_count = 0;
+ 129:     .         	    for (int i = ibegin; i <= iend; ++i) {
+ 130:     .         	      ++evaluation_count;
+ 131:     .         	      if (sigma_output[i] > -DBL_MAX && sigma_output[i] < DBL_MAX) {
+ 132:     .         	        ++success_count;
+ 133:     .         	        sum += sigma_output[i];
+ 134:     .         	        double rel_diff = fabs(sigma_output[i] / sigma_input[i] - 1);
+ 135:     .         	#if defined( NO_PREMAPPING_OF_VOLATILITIES ) // Express relative (residual) difference as a proportion of what is theoretically attainable. Numbers lower than 1 suggest that the numerics is, net, more accurate than DBL_EPSILON, which is the nominal granularity.
+ 136:     .         	        rel_diff /= (DBL_EPSILON * (1 + fabs(1 / BlackAccuracyFactor(x, sigma_input[i] * sqrt_T, 1))));
+ 137:     .         	#if defined( LOG_OUTLIERS )
+ 138:     .         	        if (rel_diff > 2) {
+ 139:     .         	          printf("%d: ImpliedBlackVolatility(%.17g,%.17g,%.17g,%.17g,%.17g) returned %.17g.\n\tsigma: %.17g, rel_diff: %g, attainable: %g, rel_diff/attainable: %g.\n", i, price[i], F, K, T, call_put, sigma_output[i], sigma_input[i], fabs(sigma_output[i] / sigma_input[i] - 1), (DBL_EPSILON * (1 + fabs(1 / BlackAccuracyFactor(x, sigma_input[i] * sqrt_T, 1)))), rel_diff);  fflush(stdout);
+ 140:     .         	        }
+ 141:     .         	#endif
+ 142:     .         	#endif
+ 143:     .         	        rel_sum += rel_diff;
+ 144:     .         	      } else {
+ 145:     .         	        printf("%d: ImpliedBlackVolatility(%.17g,%.17g,%.17g,%.17g,%.17g) returned %g.\n", i, price[i], F, K, T, call_put, sigma_output[i]);  fflush(stdout);
+ 146:     .         	      }
+ 147:     .         	    }
+ 148:     .         	
+ 149:     .         	#if defined( NO_PREMAPPING_OF_VOLATILITIES )
+ 150:     .         	    //
+ 151:     .         	    // NOTE: when this number is below 1, the algorithm does better than what is theoretically attainable according to error propagation analysis (1st order).
+ 152:     .         	    // See lets_be_rational.cpp for a derivation.
+ 153:     .         	    //
+ 154:     .         	#define RELATIVE_ACCURACY_OUTPUT "|(attained accuracy)/(theoretically attainable accuracy)|"
+ 155:     .         	#else
+ 156:     .         	#define RELATIVE_ACCURACY_OUTPUT "|(relative volatility difference)|"
+ 157:     .         	#endif
+ 158:     .         	    printf("#\n# Total implied volatility evaluations: %d\tAverage time: %g microseconds\tAverage volatility [%d]: %g\tAverage " RELATIVE_ACCURACY_OUTPUT " : %g\n", evaluation_count, elapsed_μsec / evaluation_count, success_count, sum / success_count, rel_sum / success_count);
+ 159:     .         	    fflush(stdout);
+ 160:     .         	    total_elapsed_μsec += elapsed_μsec;
+ 161:     .         	    total_evaluation_count += evaluation_count;
+ 162:     .         	    total_rel_sum += rel_sum;
+ 163:     .         	    total_success_count += success_count;
+ 164:     .         	  }
+ 165:     .         	  printf("\nAverage over %zu different values for x:  %g  microseconds per evaluation (%zu successful evaluations in total).\n\nTotal average " RELATIVE_ACCURACY_OUTPUT " : %g.\n", x_values.size(), total_elapsed_μsec / total_evaluation_count, total_evaluation_count, total_rel_sum / total_success_count);
+ 166:     .         	#if defined( NO_PREMAPPING_OF_VOLATILITIES )
+ 167:     .         	  printf("This means the method is on average %g times more accurate than what one could\nhope for on the basis of first order error propagation analysis.\n", floor(total_success_count / total_rel_sum * 10 + 0.5) / 10);
+ 168:     .         	#endif
+ 169:     .         	  printf("\n");
+ 170:     .         	  fflush(stdout);
+ 171:     .         	  return 0;
+ 172:     .         	}
+ 173:     .         	
+ 174:     .         	/*
+ 175:     .         	
+ 176:     .         	Output on 12th Gen Intel(R) Core(TM) i5-12500H under Windows 11 with Visual-Studio-2022-generated 64 bit LetsBeRational.xll:
+ 177:     .         	
+ 178:     .         	  letsberational_timing.exe	2097152	0 1e-14 1e-08 0.0001 0.001 0.01 0.05 0.1 0.25 0.5 1 2 4 8 16 32 64 128 256 512
+ 179:     .         	
+ 180:     .         	  Loaded LetsBeRational.xll revision 1517 [64 bit RELEASE running on 12th Gen Intel(R) Core(TM) i5-12500H] compiled with MSVC 1938 on Fri Feb  9 12:35:58 2024 from .\x64 .
+ 181:     .         	
+ 182:     .         	  #
+ 183:     .         	  # |x|=0	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=5.9447e-09	beta_max=1+2.22045E-16	s_min=1.11549e-307	s_mid=1.49012e-08	s_max=16.4191
+ 184:     .         	  #
+ 185:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.0143051 microseconds	Average volatility [2097152]: 4.1048	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.311444
+ 186:     .         	  #
+ 187:     .         	  # |x|=1e-14	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=5.6419e-08	beta_max=1-5.21805E-15	s_min=2.74241e-16	s_mid=1.41421e-07	s_max=16.4191
+ 188:     .         	  #
+ 189:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.213146 microseconds	Average volatility [2097152]: 4.10487	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.199789
+ 190:     .         	  #
+ 191:     .         	  # |x|=1e-08	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=5.6414e-05	beta_max=1-5E-09	s_min=2.71654e-10	s_mid=0.000141421	s_max=16.4191
+ 192:     .         	  #
+ 193:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.211716 microseconds	Average volatility [2097152]: 4.10491	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.176068
+ 194:     .         	  #
+ 195:     .         	  # |x|=0.0001	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.00559199	beta_max=0.99995	s_min=2.6983e-06	s_mid=0.0141421	s_max=16.4191
+ 196:     .         	  #
+ 197:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.224113 microseconds	Average volatility [2097152]: 4.10842	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.180289
+ 198:     .         	  #
+ 199:     .         	  # |x|=0.001	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.0173442	beta_max=0.9995	s_min=2.6938e-05	s_mid=0.0447214	s_max=16.5847
+ 200:     .         	  #
+ 201:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.222683 microseconds	Average volatility [2097152]: 4.15711	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.185026
+ 202:     .         	  #
+ 203:     .         	  # |x|=0.01	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.0515133	beta_max=0.995012	s_min=0.000268932	s_mid=0.141421	s_max=16.4191
+ 204:     .         	  #
+ 205:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.222206 microseconds	Average volatility [2097152]: 4.14062	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.166606
+ 206:     .         	  #
+ 207:     .         	  # |x|=0.05	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.102224	beta_max=0.97531	s_min=0.0013431	s_mid=0.316228	s_max=16.4191
+ 208:     .         	  #
+ 209:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.224113 microseconds	Average volatility [2097152]: 4.18558	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.181195
+ 210:     .         	  #
+ 211:     .         	  # |x|=0.1	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.13147	beta_max=0.951229	s_min=0.00268486	s_mid=0.447214	s_max=16.4191
+ 212:     .         	  #
+ 213:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.22316 microseconds	Average volatility [2097152]: 4.21981	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.181877
+ 214:     .         	  #
+ 215:     .         	  # |x|=0.25	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.169576	beta_max=0.882497	s_min=0.00670774	s_mid=0.707107	s_max=16.419
+ 216:     .         	  #
+ 217:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.233173 microseconds	Average volatility [2097152]: 4.28906	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.18944
+ 218:     .         	  #
+ 219:     .         	  # |x|=0.5	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.185683	beta_max=0.778801	s_min=0.0134088	s_mid=1	s_max=16.419
+ 220:     .         	  #
+ 221:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.231266 microseconds	Average volatility [2097152]: 4.36918	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.192639
+ 222:     .         	  #
+ 223:     .         	  # |x|=1	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.173594	beta_max=0.606531	s_min=0.0268043	s_mid=1.41421	s_max=16.5843
+ 224:     .         	  #
+ 225:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.231743 microseconds	Average volatility [2097152]: 4.52798	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.205976
+ 226:     .         	  #
+ 227:     .         	  # |x|=2	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.122098	beta_max=0.367879	s_min=0.0535819	s_mid=2	s_max=16.7471
+ 228:     .         	  #
+ 229:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.231266 microseconds	Average volatility [2097152]: 4.74136	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.189608
+ 230:     .         	  #
+ 231:     .         	  # |x|=4	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.0503856	beta_max=0.135335	s_min=0.107111	s_mid=2.82843	s_max=16.9049
+ 232:     .         	  #
+ 233:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.231743 microseconds	Average volatility [2097152]: 5.03968	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.209238
+ 234:     .         	  #
+ 235:     .         	  # |x|=8	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.00742863	beta_max=0.0183156	s_min=0.214116	s_mid=4	s_max=17.3664
+ 236:     .         	  #
+ 237:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.234127 microseconds	Average volatility [2097152]: 5.54777	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.198157
+ 238:     .         	  #
+ 239:     .         	  # |x|=16	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.000144752	beta_max=0.000335463	s_min=0.428025	s_mid=5.65685	s_max=18.2291
+ 240:     .         	  #
+ 241:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.23365 microseconds	Average volatility [2097152]: 6.3693	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.201242
+ 242:     .         	  #
+ 243:     .         	  # |x|=32	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=5.07396e-08	beta_max=1.12535E-07	s_min=0.855669	s_mid=8	s_max=19.6294
+ 244:     .         	  #
+ 245:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.235558 microseconds	Average volatility [2097152]: 7.66943	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.193699
+ 246:     .         	  #
+ 247:     .         	  # |x|=64	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=5.88893e-15	beta_max=1.26642E-14	s_min=1.71083	s_mid=11.3137	s_max=22.1223
+ 248:     .         	  #
+ 249:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.236034 microseconds	Average volatility [2097152]: 9.80499	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.221542
+ 250:     .         	  #
+ 251:     .         	  # |x|=128	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=7.62071e-29	beta_max=1.60381E-28	s_min=3.42264	s_mid=16	s_max=26.097
+ 252:     .         	  #
+ 253:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.238895 microseconds	Average volatility [2097152]: 13.2336	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.234024
+ 254:     .         	  #
+ 255:     .         	  # |x|=256	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=1.24084e-56	beta_max=2.57221E-56	s_min=6.86354	s_mid=22.6274	s_max=32.2536
+ 256:     .         	  #
+ 257:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.243664 microseconds	Average volatility [2097152]: 18.7276	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.273513
+ 258:     .         	  #
+ 259:     .         	  # |x|=512	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=3.22573e-112	beta_max=6.61626E-112	s_min=13.9032	s_mid=32	s_max=41.1406
+ 260:     .         	  #
+ 261:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.242233 microseconds	Average volatility [2097152]: 27.458	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.302781
+ 262:     .         	
+ 263:     .         	  Average over 20 different values for x:  0.21894  microseconds per evaluation (41943040 successful evaluations in total).
+ 264:     .         	
+ 265:     .         	  Total average |(attained accuracy)/(theoretically attainable accuracy)| : 0.209708.
+ 266:     .         	  This means the method is on average 4.8 times more accurate than what one could
+ 267:     .         	  hope for on the basis of first order error propagation analysis.
+ 268:     .         	
+ 269:     .         	Same output on the same 12th Gen Intel(R) Core(TM) i5-12500H under Windows-Subsystem-for-Linux ('WSL') with g++-generated LetsBeRational.so:
+ 270:     .         	
+ 271:     .         	  letsberational_timing	2097152	0 1e-14 1e-08 0.0001 0.001 0.01 0.05 0.1 0.25 0.5 1 2 4 8 16 32 64 128 256 512
+ 272:     .         	
+ 273:     .         	  Loaded LetsBeRational.so revision 1517 [64 bit RELEASE running on 12th Gen Intel(R) Core(TM) i5-12500H] compiled with GCC 11.4.0 on Feb  9 2024 12:36:48 from ./Linux/. .
+ 274:     .         	
+ 275:     .         	  #
+ 276:     .         	  # |x|=0	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=5.9447e-09	beta_max=1+2.22045E-16	s_min=1.11549e-307	s_mid=1.49012e-08	s_max=16.4191
+ 277:     .         	  #
+ 278:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.0128997 microseconds	Average volatility [2097152]: 4.1048	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.311554
+ 279:     .         	  #
+ 280:     .         	  # |x|=1e-14	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=5.6419e-08	beta_max=1-5.44009E-15	s_min=2.74241e-16	s_mid=1.41421e-07	s_max=16.4191
+ 281:     .         	  #
+ 282:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.170873 microseconds	Average volatility [2097152]: 4.10487	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.19984
+ 283:     .         	  #
+ 284:     .         	  # |x|=1e-08	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=5.6414e-05	beta_max=1-5E-09	s_min=2.71654e-10	s_mid=0.000141421	s_max=16.4191
+ 285:     .         	  #
+ 286:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.173891 microseconds	Average volatility [2097152]: 4.10491	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.176204
+ 287:     .         	  #
+ 288:     .         	  # |x|=0.0001	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.00559199	beta_max=0.99995	s_min=2.6983e-06	s_mid=0.0141421	s_max=16.4191
+ 289:     .         	  #
+ 290:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.182698 microseconds	Average volatility [2097152]: 4.10842	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.180515
+ 291:     .         	  #
+ 292:     .         	  # |x|=0.001	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.0173442	beta_max=0.9995	s_min=2.6938e-05	s_mid=0.0447214	s_max=16.5847
+ 293:     .         	  #
+ 294:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.182578 microseconds	Average volatility [2097152]: 4.15711	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.184418
+ 295:     .         	  #
+ 296:     .         	  # |x|=0.01	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.0515133	beta_max=0.995012	s_min=0.000268932	s_mid=0.141421	s_max=16.4191
+ 297:     .         	  #
+ 298:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.183155 microseconds	Average volatility [2097152]: 4.14062	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.165197
+ 299:     .         	  #
+ 300:     .         	  # |x|=0.05	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.102224	beta_max=0.97531	s_min=0.0013431	s_mid=0.316228	s_max=16.4191
+ 301:     .         	  #
+ 302:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.182751 microseconds	Average volatility [2097152]: 4.18558	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.17975
+ 303:     .         	  #
+ 304:     .         	  # |x|=0.1	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.13147	beta_max=0.951229	s_min=0.00268486	s_mid=0.447214	s_max=16.4191
+ 305:     .         	  #
+ 306:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.182914 microseconds	Average volatility [2097152]: 4.21981	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.180669
+ 307:     .         	  #
+ 308:     .         	  # |x|=0.25	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.169576	beta_max=0.882497	s_min=0.00670774	s_mid=0.707107	s_max=16.419
+ 309:     .         	  #
+ 310:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.185355 microseconds	Average volatility [2097152]: 4.28906	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.188376
+ 311:     .         	  #
+ 312:     .         	  # |x|=0.5	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.185683	beta_max=0.778801	s_min=0.0134088	s_mid=1	s_max=16.419
+ 313:     .         	  #
+ 314:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.190561 microseconds	Average volatility [2097152]: 4.36918	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.191533
+ 315:     .         	  #
+ 316:     .         	  # |x|=1	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.173594	beta_max=0.606531	s_min=0.0268043	s_mid=1.41421	s_max=16.5843
+ 317:     .         	  #
+ 318:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.188735 microseconds	Average volatility [2097152]: 4.52798	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.204395
+ 319:     .         	  #
+ 320:     .         	  # |x|=2	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.122098	beta_max=0.367879	s_min=0.0535819	s_mid=2	s_max=16.7471
+ 321:     .         	  #
+ 322:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.189846 microseconds	Average volatility [2097152]: 4.74136	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.187557
+ 323:     .         	  #
+ 324:     .         	  # |x|=4	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.0503856	beta_max=0.135335	s_min=0.107111	s_mid=2.82843	s_max=16.9049
+ 325:     .         	  #
+ 326:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.189721 microseconds	Average volatility [2097152]: 5.03968	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.206443
+ 327:     .         	  #
+ 328:     .         	  # |x|=8	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.00742863	beta_max=0.0183156	s_min=0.214116	s_mid=4	s_max=17.3664
+ 329:     .         	  #
+ 330:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.193346 microseconds	Average volatility [2097152]: 5.54777	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.195761
+ 331:     .         	  #
+ 332:     .         	  # |x|=16	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=0.000144752	beta_max=0.000335463	s_min=0.428025	s_mid=5.65685	s_max=18.2291
+ 333:     .         	  #
+ 334:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.191633 microseconds	Average volatility [2097152]: 6.3693	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.194923
+ 335:     .         	  #
+ 336:     .         	  # |x|=32	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=5.07396e-08	beta_max=1.12535E-07	s_min=0.855669	s_mid=8	s_max=19.6294
+ 337:     .         	  #
+ 338:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.198159 microseconds	Average volatility [2097152]: 7.66943	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.186801
+ 339:     .         	  #
+ 340:     .         	  # |x|=64	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=5.88893e-15	beta_max=1.26642E-14	s_min=1.71083	s_mid=11.3137	s_max=22.1223
+ 341:     .         	  #
+ 342:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.196647 microseconds	Average volatility [2097152]: 9.80499	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.204658
+ 343:     .         	  #
+ 344:     .         	  # |x|=128	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=7.62071e-29	beta_max=1.60381E-28	s_min=3.42264	s_mid=16	s_max=26.097
+ 345:     .         	  #
+ 346:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.198939 microseconds	Average volatility [2097152]: 13.2336	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.217422
+ 347:     .         	  #
+ 348:     .         	  # |x|=256	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=1.24084e-56	beta_max=2.57221E-56	s_min=6.86354	s_mid=22.6274	s_max=32.2536
+ 349:     .         	  #
+ 350:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.201471 microseconds	Average volatility [2097152]: 18.7276	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.249163
+ 351:     .         	  #
+ 352:     .         	  # |x|=512	number_of_points=2097152	beta_min=4.45015e-308	beta_mid=3.22573e-112	beta_max=6.61626E-112	s_min=13.9032	s_mid=32	s_max=41.1406
+ 353:     .         	  #
+ 354:     .         	  # Total implied volatility evaluations: 2097152	Average time: 0.195073 microseconds	Average volatility [2097152]: 27.458	Average |(attained accuracy)/(theoretically attainable accuracy)| : 0.281389
+ 355:     .         	
+ 356:     .         	  Average over 20 different values for x:  0.179562  microseconds per evaluation (41943040 successful evaluations in total).
+ 357:     .         	
+ 358:     .         	  Total average |(attained accuracy)/(theoretically attainable accuracy)| : 0.204328.
+ 359:     .         	  This means the method is on average 4.9 times more accurate than what one could
+ 360:     .         	  hope for on the basis of first order error propagation analysis.
+ 361:     .         	
+ 362:     .         	*/

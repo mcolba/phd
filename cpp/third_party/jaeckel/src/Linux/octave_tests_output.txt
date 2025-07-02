@@ -1,0 +1,43 @@
+make[1]: Entering directory './Implementation/LetsBeRational'
+cd ./Linux; octave --eval 'printf("\nThis is GNU Octave version %s.\n",version()); letsberational; sigma=ImpliedBlackVolatility(Black(1,1,1,1,1),1,1,1,1); printf("\tImpliedBlackVolatility(Black(1,1,1,1,1),1,1,1,1) = %g\n\n",sigma); assert( abs(sigma-1) < 1E-15 )'
+
+This is GNU Octave version 6.4.0.
+
+Loaded dynamic load library LetsBeRational.so revision 1520 [64 bit RELEASE running on 12th Gen Intel(R) Core(TM) i5-12500H] compiled with GCC 11.4.0 on Feb 15 2024 18:47:33 from ./Linux/. .
+
+Registered the following functions for autoloading from letsberational.oct by Octave:
+
+	Black()
+	CPUName()
+	ImpliedBlackVolatility()
+
+	ImpliedBlackVolatility(Black(1,1,1,1,1),1,1,1,1) = 1
+
+cd ./Linux; octave --eval 'printf("\nThis is GNU Octave version %s.\n",version()); letsberational_via_swig; sigma=ImpliedBlackVolatility(Black(1,1,1,1,1),1,1,1,1); printf("\tImpliedBlackVolatility(Black(1,1,1,1,1),1,1,1,1) = %g\n\n",sigma); assert( abs(sigma-1) < 1E-15 )'
+
+This is GNU Octave version 6.4.0.
+
+Loaded dynamic load library LetsBeRational.so revision 1520 [64 bit RELEASE running on 12th Gen Intel(R) Core(TM) i5-12500H] compiled with GCC 11.4.0 on Feb 15 2024 18:47:33 from ./Linux/. .
+
+Registered the following functions for autoloading from letsberational_via_swig.oct by Octave:
+
+	Black()
+	BlackAccuracyFactor()
+	CPUName()
+	ComplementaryNormalisedBlack()
+	DblEpsilon()
+	DblMax()
+	DblMin()
+	ImpliedBlackVolatility()
+	ImpliedVolatilityAttainableAccuracy()
+	NormalisedBlack()
+	NormalisedImpliedBlackVolatility()
+	NormalisedVega()
+	NormalisedVolga()
+	Revision()
+	Vega()
+	Volga()
+
+	ImpliedBlackVolatility(Black(1,1,1,1,1),1,1,1,1) = 1
+
+make[1]: Leaving directory './Implementation/LetsBeRational'

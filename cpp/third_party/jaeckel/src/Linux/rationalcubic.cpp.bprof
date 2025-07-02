@@ -1,0 +1,114 @@
+   1:     .         	//
+   2:     .         	// This source code resides at www.jaeckel.org/LetsBeRational.7z .
+   3:     .         	//
+   4:     .         	// ======================================================================================
+   5:     .         	// Copyright © 2013-2024 Peter Jäckel.
+   6:     .         	//
+   7:     .         	// Permission to use, copy, modify, and distribute this software is freely granted,
+   8:     .         	// provided that this notice is preserved.
+   9:     .         	//
+  10:     .         	// WARRANTY DISCLAIMER
+  11:     .         	// The Software is provided "as is" without warranty of any kind, either express or implied,
+  12:     .         	// including without limitation any implied warranties of condition, uninterrupted use,
+  13:     .         	// merchantability, fitness for a particular purpose, or non-infringement.
+  14:     .         	// ======================================================================================
+  15:     .         	//
+  16:     .         	
+  17:     .         	#include "rationalcubic.h"
+  18:     .         	
+  19:     .         	#if defined(_MSC_VER)
+  20:     .         	# define NOMINMAX // to suppress MSVC's definitions of min() and max()
+  21:     .         	#endif
+  22:     .         	
+  23:     .         	#include <float.h>
+  24:     .         	#include <cmath>
+  25:     .         	#include <algorithm>
+  26:     .         	
+  27:     .         	// Based on
+  28:     .         	//
+  29:     .         	//    “Shape preserving piecewise rational interpolation”, R. Delbourgo, J.A. Gregory - SIAM journal on scientific and statistical computing, 1985 - SIAM.
+  30:     .         	//    http://dspace.brunel.ac.uk/bitstream/2438/2200/1/TR_10_83.pdf  [caveat emptor: there are some typographical errors in that draft version]
+  31:     .         	//
+  32:     .         	
+  33:     .         	namespace {
+  34:     .         	  const double minimum_rational_cubic_control_parameter_value = -(1 - sqrt(DBL_EPSILON));
+  35:     .         	  const double maximum_rational_cubic_control_parameter_value = 2 / (DBL_EPSILON * DBL_EPSILON);
+  36:   116 [ 0.23%]	  inline bool is_zero(double x) { return fabs(x) < DBL_MIN; }
+  37:     .         	}
+  38:     .         	
+  39:   124 [ 0.24%]	double rational_cubic_interpolation(double x, double x_l, double x_r, double y_l, double y_r, double d_l, double d_r, double r) {
+  40:     .         	  const double h = (x_r - x_l);
+  41:     .         	  if (fabs(h) <= 0)
+  42:     .         	    return 0.5 * (y_l + y_r);
+  43:     .         	  // r should be greater than -1. We do not use  assert(r > -1)  here in order to allow values such as NaN to be propagated as they should.
+  44:     .         	  const double t = (x - x_l) / h;
+  45:     .         	  if (!(r >= maximum_rational_cubic_control_parameter_value)) {
+  46:   164 [ 0.32%]	    const double t = (x - x_l) / h, omt = 1 - t, t2 = t * t, omt2 = omt * omt;
+  47:     .         	    // Formula (2.4) divided by formula (2.5)
+  48:  2230 [ 4.26%]	    return (y_r * t2 * t + (r * y_r - h * d_r) * t2 * omt + (r * y_l + h * d_l) * t * omt2 + y_l * omt2 * omt) / (1 + (r - 3) * t * omt);
+  49:     .         	    // Note that the above line could be rewritten as below, though, tests suggest it makes no speed difference, despite having fewer multiplications.
+  50:     .         	    // It is just possible that the compiler reorganizes the multiplication and addition sequence in both formulations to the same binary code, as permitted by -Ofast.
+  51:     .         	    //    return (t2 * (y_r * t + (r * y_r - h * d_r) * omt) + omt2 * ((r * y_l + h * d_l) * t + y_l * omt)) / (1 + (r - 3) * t * omt);
+  52:     .         	  }
+  53:     .         	  // Linear interpolation without over-or underflow.
+  54:     .         	  return y_r * t + y_l * (1 - t);
+  55:     .         	}
+  56:     .         	
+  57:     .         	double rational_cubic_control_parameter_to_fit_second_derivative_at_left_side(double x_l, double x_r, double y_l, double y_r, double d_l, double d_r, double second_derivative_l) {
+  58:    17 [ 0.04%]	  const double h = (x_r - x_l), numerator = 0.5 * h * second_derivative_l + (d_r - d_l);
+  59:     .         	#if defined( ALLOW_REDUNDANT_BRANCH_SWITCHES )
+  60:     .         	  if (is_zero(numerator))
+  61:     .         	    return 0;
+  62:     .         	#endif
+  63:    24 [ 0.05%]	  const double denominator = (y_r - y_l) / h - d_l;
+  64:   128 [ 0.25%]	  if (is_zero(denominator))
+  65:     .         	    return numerator > 0 ? maximum_rational_cubic_control_parameter_value : minimum_rational_cubic_control_parameter_value;
+  66:   478 [ 0.92%]	  return numerator / denominator;
+  67:     .         	}
+  68:     .         	
+  69:     .         	double rational_cubic_control_parameter_to_fit_second_derivative_at_right_side(double x_l, double x_r, double y_l, double y_r, double d_l, double d_r, double second_derivative_r) {
+  70:     .         	  const double h = (x_r - x_l), numerator = 0.5 * h * second_derivative_r + (d_r - d_l);
+  71:     .         	#if defined( ALLOW_REDUNDANT_BRANCH_SWITCHES )
+  72:     .         	  if (is_zero(numerator))
+  73:     .         	    return 0;
+  74:     .         	#endif
+  75:     .         	  const double denominator = d_r - (y_r - y_l) / h;
+  76:   129 [ 0.25%]	  if (is_zero(denominator))
+  77:     .         	    return numerator > 0 ? maximum_rational_cubic_control_parameter_value : minimum_rational_cubic_control_parameter_value;
+  78:   533 [ 1.02%]	  return numerator / denominator;
+  79:     .         	}
+  80:     .         	
+  81:     .         	double minimum_rational_cubic_control_parameter(double d_l, double d_r, double s, bool preferShapePreservationOverSmoothness) {
+  82:   174 [ 0.34%]	  const bool monotonic = d_l * s >= 0 && d_r * s >= 0, convex = d_l <= s && s <= d_r, concave = d_l >= s && s >= d_r;
+  83:     .         	  if (!monotonic && !convex && !concave) // If 3==r_non_shape_preserving_target, this means revert to standard cubic.
+  84:     .         	    return minimum_rational_cubic_control_parameter_value;
+  85:     .         	  const double d_r_m_d_l = d_r - d_l, d_r_m_s = d_r - s, s_m_d_l = s - d_l;
+  86:    45 [ 0.09%]	  double r1 = -DBL_MAX, r2 = r1;
+  87:     .         	  // If monotonicity on this interval is possible, set r1 to satisfy the monotonicity condition (3.8).
+  88:     .         	  if (monotonic) {
+  89:    38 [ 0.08%]	    if (!is_zero(s)) // (3.8), avoiding division by zero.
+  90:   170 [ 0.33%]	      r1 = (d_r + d_l) / s; // (3.8)
+  91:     .         	    else if (preferShapePreservationOverSmoothness) // If division by zero would occur, and shape preservation is preferred, set value to enforce linear interpolation.
+  92:     .         	      r1 = maximum_rational_cubic_control_parameter_value;  // This value enforces linear interpolation.
+  93:     .         	  }
+  94:    50 [ 0.10%]	  if (convex || concave) {
+  95:     4 [ 0.01%]	    if (!(is_zero(s_m_d_l) || is_zero(d_r_m_s))) // (3.18), avoiding division by zero.
+  96:  1075 [ 2.05%]	      r2 = std::max(fabs(d_r_m_d_l / d_r_m_s), fabs(d_r_m_d_l / s_m_d_l));
+  97:     .         	    else if (preferShapePreservationOverSmoothness)
+  98:     .         	      r2 = maximum_rational_cubic_control_parameter_value; // This value enforces linear interpolation.
+  99:     .         	  } else if (monotonic && preferShapePreservationOverSmoothness)
+ 100:     2 [ 0.01%]	    r2 = maximum_rational_cubic_control_parameter_value; // This enforces linear interpolation along segments that are inconsistent with the slopes on the boundaries, e.g., a perfectly horizontal segment that has negative slopes on either edge.
+ 101:    93 [ 0.18%]	  return std::max(minimum_rational_cubic_control_parameter_value, std::max(r1, r2));
+ 102:     .         	}
+ 103:     .         	
+ 104:    72 [ 0.14%]	double convex_rational_cubic_control_parameter_to_fit_second_derivative_at_left_side(double x_l, double x_r, double y_l, double y_r, double d_l, double d_r, double second_derivative_l, bool preferShapePreservationOverSmoothness) {
+ 105:     .         	  const double r = rational_cubic_control_parameter_to_fit_second_derivative_at_left_side(x_l, x_r, y_l, y_r, d_l, d_r, second_derivative_l);
+ 106:     .         	  const double r_min = minimum_rational_cubic_control_parameter(d_l, d_r, (y_r - y_l) / (x_r - x_l), preferShapePreservationOverSmoothness);
+ 107:     7 [ 0.02%]	  return std::max(r, r_min);
+ 108:   160 [ 0.31%]	}
+ 109:     .         	
+ 110:   106 [ 0.21%]	double convex_rational_cubic_control_parameter_to_fit_second_derivative_at_right_side(double x_l, double x_r, double y_l, double y_r, double d_l, double d_r, double second_derivative_r, bool preferShapePreservationOverSmoothness) {
+ 111:     .         	  const double r = rational_cubic_control_parameter_to_fit_second_derivative_at_right_side(x_l, x_r, y_l, y_r, d_l, d_r, second_derivative_r);
+ 112:     .         	  const double r_min = minimum_rational_cubic_control_parameter(d_l, d_r, (y_r - y_l) / (x_r - x_l), preferShapePreservationOverSmoothness);
+ 113:     .         	  return std::max(r, r_min);
+ 114:   191 [ 0.37%]	}

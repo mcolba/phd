@@ -1,0 +1,37 @@
+   1:     .         	//
+   2:     .         	// This source code resides at www.jaeckel.org/LetsBeRational.7z .
+   3:     .         	//
+   4:     .         	// ======================================================================================
+   5:     .         	// Copyright © 2013-2024 Peter Jäckel.
+   6:     .         	//
+   7:     .         	// Permission to use, copy, modify, and distribute this software is freely granted,
+   8:     .         	// provided that this notice is preserved.
+   9:     .         	//
+  10:     .         	// WARRANTY DISCLAIMER
+  11:     .         	// The Software is provided "as is" without warranty of any kind, either express or implied,
+  12:     .         	// including without limitation any implied warranties of condition, uninterrupted use,
+  13:     .         	// merchantability, fitness for a particular purpose, or non-infringement.
+  14:     .         	// ======================================================================================
+  15:     .         	//
+  16:     .         	#ifndef   NORMAL_DISTRIBUTION_H
+  17:     .         	#define   NORMAL_DISTRIBUTION_H
+  18:     .         	
+  19:     .         	#include "dllmain.h"
+  20:     .         	
+  21:     .         	#include <math.h>
+  22:     .         	#include <cmath>
+  23:     .         	
+  24:     .         	#define SQRT_TWO              1.4142135623730950488016887242096980785696718753769
+  25:     .         	#define SQRT_TWO_PI           2.5066282746310005024157652848110452530069867406099
+  26:     .         	#define LN_TWO_PI             1.8378770664093454835606594728112352797227949472756
+  27:     .         	
+  28:     .         	double erf_cody(double z);
+  29:     .         	double erfc_cody(double z);
+  30:     .         	double erfcx_cody(double z);
+  31:     .         	
+  32:    39 [ 0.08%]	inline double norm_pdf(double x) { return (1 / SQRT_TWO_PI) * exp(-.5 * x * x); }
+  33:     .         	
+  34:     .         	extern "C" DLL_EXPORT double norm_cdf(double z);
+  35:     .         	extern "C" DLL_EXPORT double inverse_norm_cdf(double u);
+  36:     .         	
+  37:     .         	#endif // NORMAL_DISTRIBUTION_H

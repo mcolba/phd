@@ -1,0 +1,1752 @@
+   1:     .         	//
+   2:     .         	// This source code resides at www.jaeckel.org/LetsBeRational.7z .
+   3:     .         	//
+   4:     .         	// ======================================================================================
+   5:     .         	// Copyright © 2013-2024 Peter Jäckel.
+   6:     .         	//
+   7:     .         	// Permission to use, copy, modify, and distribute this software is freely granted,
+   8:     .         	// provided that this notice is preserved.
+   9:     .         	//
+  10:     .         	// WARRANTY DISCLAIMER
+  11:     .         	// The Software is provided "as is" without warranty of any kind, either express or implied,
+  12:     .         	// including without limitation any implied warranties of condition, uninterrupted use,
+  13:     .         	// merchantability, fitness for a particular purpose, or non-infringement.
+  14:     .         	// ======================================================================================
+  15:     .         	//
+  16:     .         	
+  17:     .         	#include "lets_be_rational.h"
+  18:     .         	
+  19:     .         	// To cross-compile on a command line, you could just use something like
+  20:     .         	//
+  21:     .         	//   i686-w64-mingw32-g++ -w -fpermissive -shared -DNDEBUG -Ofast erf_cody.cpp lets_be_rational.cpp main.cpp normaldistribution.cpp rationalcubic.cpp XLFunctions.cpp XLOper.cpp -o LetsBeRational.xll -static-libstdc++ -static-libgcc -s
+  22:     .         	//
+  23:     .         	// To compile into a shared library on non-Windows systems, you can use
+  24:     .         	//
+  25:     .         	//   g++ -fPIC -shared -DNDEBUG -Ofast erf_cody.cpp lets_be_rational.cpp main.cpp normaldistribution.cpp rationalcubic.cpp XLFunctions.cpp XLOper.cpp -o LetsBeRational.so -s
+  26:     .         	//
+  27:     .         	
+  28:     .         	#if defined(_MSC_VER)
+  29:     .         	# define NOMINMAX // to suppress MSVC's definitions of min() and max()
+  30:     .         	#endif
+  31:     .         	
+  32:     .         	#include "normaldistribution.h"
+  33:     .         	#include "rationalcubic.h"
+  34:     .         	#include <float.h>
+  35:     .         	#include <cmath>
+  36:     .         	#include <algorithm>
+  37:     .         	#if defined(_WIN32) || defined(_WIN64)
+  38:     .         	# include <windows.h>
+  39:     .         	#endif
+  40:     .         	
+  41:     .         	// Useful for RELEASE-only issues (old-fashioned pedestrian debugging).
+  42:     .         	//#define PRINTVAR( v ) { printf( #v ": %.17g\n",v); fflush(stdout); }
+  43:     .         	
+  44:     .         	#if defined( LOG_BINARY_NESTING ) || defined( PRINTVAR ) || ( defined( SAFEGUARD_VEGA_AGAINST_ZERO_VOLATILITY ) && defined( LOG_VEGA_OVERFLOW ) )
+  45:     .         	#include <stdio.h>
+  46:     .         	#endif
+  47:     .         	
+  48:     .         	#include <assert.h>
+  49:     .         	
+  50:     .         	#include <tuple>
+  51:     .         	
+  52:     .         	#define TWO_PI                            6.283185307179586476925286766559005768394338798750
+  53:     .         	#define SQRT_PI_OVER_TWO                  1.253314137315500251207882642405522626503493370305  // sqrt(pi/2) to avoid misinterpretation.
+  54:     .         	#define SQRT_THREE                        1.732050807568877293527446341505872366942805253810
+  55:     .         	#define SQRT_ONE_OVER_THREE               0.577350269189625764509148780501957455647601751270
+  56:     .         	#define TWO_PI_OVER_SQRT_TWENTY_SEVEN     1.209199576156145233729385505094770488189377498728 // 2*pi/sqrt(27)
+  57:     .         	#define SQRT_THREE_OVER_THIRD_ROOT_TWO_PI 0.938643487427383566075051356115075878414688769574 // √3 / ∛(2π)
+  58:     .         	#define PI_OVER_SIX                       0.523598775598298873077107230546583814032861566563
+  59:     .         	
+  60:     .         	namespace {
+  61:     .         	  static const double SQRT_DBL_EPSILON = sqrt(DBL_EPSILON);
+  62:     .         	  static const double FOURTH_ROOT_DBL_EPSILON = sqrt(SQRT_DBL_EPSILON);
+  63:     .         	  static const double EIGHTH_ROOT_DBL_EPSILON = sqrt(FOURTH_ROOT_DBL_EPSILON);
+  64:     .         	  static const double SIXTEENTH_ROOT_DBL_EPSILON = sqrt(EIGHTH_ROOT_DBL_EPSILON);
+  65:     .         	  static const double SQRT_DBL_MIN = sqrt(DBL_MIN);
+  66:     .         	  static const double SQRT_DBL_MAX = sqrt(DBL_MAX);
+  67:     .         	
+  68:     .         	  // Define this to a positive non-denormalised number if you want to suppress positive results for for (positive) denormalised inputs.
+  69:     .         	  // NOT RECOMMENDED.
+  70:     .         	  //#define POSITIVE_DENORMALISATION_CUTOFF DBL_MIN
+  71:     .         	
+  72:     .         	  static const double VOLATILITY_VALUE_TO_SIGNAL_PRICE_IS_BELOW_INTRINSIC = -DBL_MAX;
+  73:     .         	  static const double VOLATILITY_VALUE_TO_SIGNAL_PRICE_IS_ABOVE_MAXIMUM = DBL_MAX;
+  74:     .         	
+  75:     .         	#if defined( POSITIVE_DENORMALISATION_CUTOFF )
+  76:     .         	  inline bool is_below_horizon(double x) { return fabs(x) < POSITIVE_DENORMALISATION_CUTOFF; } // This weeds out denormalised (a.k.a. 'subnormal') numbers.
+  77:     .         	#endif
+  78:     .         	
+  79:     .         	#if defined ( USE_ORIGINAL_REGION_DEFINITIONS )
+  80:     .         	# define ETA -10 /* η */
+  81:     .         	#else
+  82:     .         	# define ETA -13 /* η */
+  83:     .         	#endif
+  84:     .         	#define TAU (2 * SIXTEENTH_ROOT_DBL_EPSILON) /* τ */
+  85:     .         	
+  86:     .         	#if defined( POSITIVE_DENORMALISATION_CUTOFF )
+  87:     .         	#define VOLATILITY_IS_CONSIDERED_ZERO(θx,s) (s <= fabs(θx) * POSITIVE_DENORMALISATION_CUTOFF)
+  88:     .         	#else
+  89:     .         	#define VOLATILITY_IS_CONSIDERED_ZERO(θx,s) (s <= 0)
+  90:     .         	#endif
+  91:     .         	
+  92:     .         	#if defined ( USE_ORIGINAL_REGION_DEFINITIONS )
+  93:     .         	  // Denote h := θx/s and t := s/2. We evaluate the condition |h|>|η|, i.e., h<η  &&  t < τ+|h|-|η|  avoiding any divisions by s , where η = ETA  and τ = TAU .
+  94:     .         	#define IS_REGION_I(θx,s)   (θx < s * ETA && 0.5 * s * s + θx < s * (TAU + ETA))
+  95:     .         	#define IS_REGION_II(θx,s)  (0.5 * s < TAU)
+  96:     .         	#else
+  97:     .         	#define IS_REGION_I(θx,s)   (θx < s * ETA && s * (0.5 * s - (TAU + 0.5 + ETA)) + θx < 0) // h < η,  t < (τ+½) + (|h|-|η|)  ⇔  s/2 < (τ+½) - θ·x/s + η  ⇔  s·(s/2-(τ+½+η))+x < 0     using    h = θ·x/s and t = s/2
+  98:     .         	#define IS_REGION_II(θx,s)  (s * (s - (2 * TAU)) - θx / ETA < 0) // t < τ + (½/|η|)·|h|  ⇔  s < 2·τ + (θ·x/s)/η  ⇔  s·(s-2·τ)-θ·x/η < 0                  using    h = θ·x/s and t = s/2
+  99:     .         	#endif
+ 100:     .         	// When b is more than, say, about 85% of bₘₐₓ = exp(θ·x/2), then b is dominated by the first of the two terms in the Black formula, and we retain more accuracy by not attempting to combine the two terms in any way.
+ 101:     .         	// We evaluate the condition h+t>0.85  avoiding any division by s.
+ 102:     .         	#define IS_REGION_III(θx,s) (s * (0.5 * s - 0.85) + θx > 0) // t+h > 0.85  ⇔  s/2+θ·x/s > 0.85  ⇔  s·(s/2-0.85)+x > 0      using    h = θ·x/s and t = s/2
+ 103:     .         	
+ 104:     .         	#if defined( ENABLE_CHANGING_THE_MAXIMUM_ITERATION_COUNT ) || defined( ENABLE_CHANGING_THE_HOUSEHOLDER_METHOD_ORDER ) || defined( E )
+ 105:     .         	
+ 106:     .         	  // See https://www.kernel.org/doc/Documentation/atomic_ops.txt for further details on this simplistic implementation of an atomic flag that is *not* volatile.
+ 107:     .         	  typedef struct {
+ 108:     .         	#if defined(_MSC_VER) || defined(_WIN32) || defined(_WIN64)
+ 109:     .         	    long data;
+ 110:     .         	#else
+ 111:     .         	    int data;
+ 112:     .         	#endif
+ 113:     .         	  } atomic_t;
+ 114:     .         	
+ 115:     .         	#endif
+ 116:     .         	
+ 117:     .         	#ifdef ENABLE_CHANGING_THE_MAXIMUM_ITERATION_COUNT
+ 118:     .         	
+ 119:     .         	  static atomic_t implied_volatility_maximum_iterations = { 2 }; // (DBL_DIG*20)/3 ≈ 100 . Only needed when the iteration effectively alternates Householder/Halley/Newton steps and binary nesting due to roundoff truncation.
+ 120:     .         	
+ 121:     .         	# define IMPLIED_VOLATILITY_MAXIMUM_ITERATIONS implied_volatility_maximum_iterations.data
+ 122:     .         	
+ 123:     .         	#else
+ 124:     .         	
+ 125:     .         	# define IMPLIED_VOLATILITY_MAXIMUM_ITERATIONS 2
+ 126:     .         	
+ 127:     .         	#endif
+ 128:     .         	
+ 129:     .         	#if defined( ENABLE_SAFE_GUARDING_IN_HOUSEHOLDER_EXPANSIONS ) // Tests show that there is in fact no need for this
+ 130:     .         	  inline double householder3_factor(double ν, double h₂, double h₃) {
+ 131:     .         	    // Safeguarding against out-of-bounds behaviour comprised by a change in sign with fallback to either Halley or Newton, whichever is admissible.
+ 132:     .         	    // The Halley method is ν / (1 + eta) with eta := 0.5 · h₂ · ν. It should have the same sign as ν = 'newton' by itself.
+ 133:     .         	    // Hence, 1 + eta <= 0 is a clear indicator that the current guess is not inside the domain of attraction of the Halley method and we should fall back to the Newton method.
+ 134:     .         	    // The Housholder(3) method is designed and intended as an improvement over the Halley method whence, if Halley is already failing the sign check, we do not even dare to look at the Housholder(3) method.
+ 135:     .         	    const double eta = 0.5 * h₂ * ν;
+ 136:     .         	    if (eta > -1) {
+ 137:     .         	      // The Housholder(3) method is ν * (1 + eta) / (1 + zeta) with zeta := ν * (h₂ + h₃ * ν / 6), and it should also have the same sign as ν = 'newton' by itself.
+ 138:     .         	      const double zeta = ν * (h₂ + h₃ * ν / 6);
+ 139:     .         	      if (zeta > -1)
+ 140:     .         	        return (1 + eta) / (1 + zeta);
+ 141:     .         	      return 1 / (1 + eta);
+ 142:     .         	    }
+ 143:     .         	    return 1;
+ 144:     .         	  }
+ 145:     .         	#else
+ 146:  2877 [ 5.49%]	  inline double householder3_factor(double ν, double h₂, double h₃) { return (1 + 0.5 * h₂ * ν) / (1 + ν * (h₂ + h₃ * ν * (1./6.))); }
+ 147:     .         	#endif
+ 148:     .         	
+ 149:   234 [ 0.45%]	  inline double householder4_factor(double ν, double h₂, double h₃, double h₄) { return (1 + ν * (h₂ + ν * h₃ * (1./6.))) / (1 + ν * (1.5 * h₂ + ν * (h₂ * h₂ * 0.25 + h₃ * (1./3.) + ν * h₄ * (1./24.)))); }
+ 150:     .         	
+ 151:     .         	#ifdef ENABLE_CHANGING_THE_HOUSEHOLDER_METHOD_ORDER
+ 152:     .         	
+ 153:     .         	  static atomic_t implied_volatility_maximum_householder_method_order = { 5 };
+ 154:     .         	
+ 155:     .         	#if defined( ENABLE_SAFE_GUARDING_IN_HOUSEHOLDER_EXPANSIONS ) // Tests show that there is in fact no need for this
+ 156:     .         	  inline double halley_factor(double ν, double h₂) {
+ 157:     .         	    // Safeguarding against out-of-bounds behaviour comprised by a change in sign with fallback to Newton.
+ 158:     .         	    // The Halley method is ν / (1 + eta) with eta := 0.5 · h₂ · ν. It should have the same sign as ν = 'newton' by itself.
+ 159:     .         	    // Hence, 1 + eta <= 0 is a clear indicator that the current guess is not inside the domain of attraction of the Halley method and we should fall back to the Newton method.
+ 160:     .         	    const double eta = 0.5 * h₂ * ν;
+ 161:     .         	    if (eta > -1)
+ 162:     .         	      return 1 / (1 + eta);
+ 163:     .         	    return 1;
+ 164:     .         	  }
+ 165:     .         	#else
+ 166:     .         	  inline double halley_factor(double ν, double h₂) { return 1 / (1 + 0.5 * h₂ * ν); }
+ 167:     .         	#endif
+ 168:     .         	
+ 169:     .         	  inline double householder_factor(double ν, double h₂, double h₃) {
+ 170:     .         	    return implied_volatility_maximum_householder_method_order.data > 3 ? householder3_factor(ν, h₂, h₃) : (implied_volatility_maximum_householder_method_order.data > 2 ? halley_factor(ν, h₂) : 1);
+ 171:     .         	  }
+ 172:     .         	  inline double householder_factor(double ν, double h₂, double h₃, double h₄) {
+ 173:     .         	    return implied_volatility_maximum_householder_method_order.data > 4 ? householder4_factor(ν, h₂, h₃, h₄) : householder_factor(ν, h₂, h₃);
+ 174:     .         	  }
+ 175:     .         	
+ 176:     .         	#else
+ 177:     .         	
+ 178:     .         	  inline double householder_factor(double ν, double h₂, double h₃) { return householder3_factor(ν, h₂, h₃); }
+ 179:     .         	  inline double householder_factor(double ν, double h₂, double h₃, double h₄) { return householder4_factor(ν, h₂, h₃, h₄); }
+ 180:     .         	
+ 181:     .         	#endif
+ 182:     .         	
+ 183:     .         	#ifdef ENABLE_SWITCHING_THE_OUTPUT_TO_ITERATION_COUNT
+ 184:     .         	
+ 185:     .         	  static atomic_t implied_volatility_output_type = { 0 };
+ 186:     .         	
+ 187:     .         	  inline double implied_volatility_output(int count, double volatility) { return implied_volatility_output_type.data != 0 ? count : volatility; }
+ 188:     .         	
+ 189:     .         	#else
+ 190:     .         	
+ 191:     .         	  inline double implied_volatility_output(int /* count */, double volatility) { return volatility; }
+ 192:     .         	
+ 193:     .         	#endif  
+ 194:     .         	
+ 195:     .         	}
+ 196:     .         	
+ 197:     .         	#ifdef ENABLE_CHANGING_THE_MAXIMUM_ITERATION_COUNT
+ 198:     .         	int set_implied_volatility_maximum_iterations(int n) {
+ 199:     .         	  if (n >= 0) {
+ 200:     .         	#if defined(_MSC_VER) || defined(_WIN32) || defined(_WIN64)
+ 201:     .         	    long i = (long)n;
+ 202:     .         	    InterlockedExchange(&(implied_volatility_maximum_iterations.data), i);
+ 203:     .         	#elif defined( __x86__ ) || defined( __x86_64__ )
+ 204:     .         	    implied_volatility_maximum_iterations.data = n;
+ 205:     .         	#else
+ 206:     .         	# error Atomic operations not implemented for this platform.
+ 207:     .         	#endif
+ 208:     .         	  }
+ 209:     .         	  return (int)implied_volatility_maximum_iterations.data;
+ 210:     .         	}
+ 211:     .         	#endif
+ 212:     .         	
+ 213:     .         	#ifdef ENABLE_CHANGING_THE_HOUSEHOLDER_METHOD_ORDER
+ 214:     .         	int set_implied_volatility_householder_method_order(int order) {
+ 215:     .         	  if (order >= 0) {
+ 216:     .         	#if defined(_MSC_VER) || defined(_WIN32) || defined(_WIN64)
+ 217:     .         	    long i = (long)order;
+ 218:     .         	    InterlockedExchange(&(implied_volatility_maximum_householder_method_order.data), i);
+ 219:     .         	#elif defined( __x86__ ) || defined( __x86_64__ )
+ 220:     .         	    implied_volatility_maximum_householder_method_order.data = order;
+ 221:     .         	#else
+ 222:     .         	# error Atomic operations not implemented for this platform.
+ 223:     .         	#endif
+ 224:     .         	  }
+ 225:     .         	  return (int)implied_volatility_maximum_householder_method_order.data;
+ 226:     .         	}
+ 227:     .         	#endif  
+ 228:     .         	
+ 229:     .         	#ifdef ENABLE_SWITCHING_THE_OUTPUT_TO_ITERATION_COUNT
+ 230:     .         	int set_implied_volatility_output_type(int type) {
+ 231:     .         	  if (type >= 0) {
+ 232:     .         	#if defined(_MSC_VER) || defined(_WIN32) || defined(_WIN64)
+ 233:     .         	    long i = (long)type;
+ 234:     .         	    InterlockedExchange(&(implied_volatility_output_type.data), i);
+ 235:     .         	#elif defined( __x86__ ) || defined( __x86_64__ )
+ 236:     .         	    implied_volatility_output_type.data = type;
+ 237:     .         	#else
+ 238:     .         	# error Atomic operations not implemented for this platform.
+ 239:     .         	#endif
+ 240:     .         	  }
+ 241:     .         	  return (int)implied_volatility_output_type.data;
+ 242:     .         	}
+ 243:     .         	#endif  
+ 244:     .         	
+ 245:     .         	inline double normalised_intrinsic(double θx) {
+ 246:     .         	#if defined( AVOID_SINH )
+ 247:     .         	  if (θx <= 0)
+ 248:     .         	    return 0;
+ 249:     .         	  const double x2 = θx * θx;
+ 250:     .         	  if (x2 < 98 * FOURTH_ROOT_DBL_EPSILON) // The factor 98 is computed from last coefficient: √√92897280 = 98.1749
+ 251:     .         	    return θx * (1 + x2 * ((1.0 / 24.0) + x2 * ((1.0 / 1920.0) + x2 * ((1.0 / 322560.0) + (1.0 / 92897280.0) * x2))));
+ 252:     .         	  // Caution: using bₘₐₓ = exp(0.5 * θx) and 1/bₘₐₓ to reduce the number of exponentials below incurs a larger roundoff error.
+ 253:     .         	  return exp(0.5 * θx) - exp(-0.5 * θx);
+ 254:     .         	#else
+ 255:     .         	  return θx <= 0 ? 0 : 2 * std::sinh(0.5 * θx);
+ 256:     .         	#endif
+ 257:     .         	}
+ 258:     .         	
+ 259:   620 [ 1.19%]	inline double square(const double x) { return x * x; }
+ 260:     .         	
+ 261:     .         	// Asymptotic expansion of the 'scaled normalised Black' function (in analogy to the 'scaled' complementary error function)
+ 262:     .         	// 
+ 263:     .         	//             bx  :=  b / ( ∂(b(x,s)/∂s )
+ 264:     .         	// with
+ 265:     .         	//
+ 266:     .         	//              b   =  Φ(h+t)·exp(θ·x/2) - Φ(h-t)·exp(-θ·x/2)
+ 267:     .         	// and
+ 268:     .         	//              h   =  θ·x/s   and   t  =  s/2   for h < 0, |h| > 10, t ≲ |h| -9.8.
+ 269:     .         	// which makes
+ 270:     .         	//              b   =  Φ(h+t)·exp(h·t) - Φ(h-t)·exp(-h·t)
+ 271:     .         	//
+ 272:     .         	//                     exp(-(h²+t²)/2)
+ 273:     .         	//                  =  ---------------  ·  [ Y(h+t) - Y(h-t) ] .
+ 274:     .         	//                         √(2π)
+ 275:     .         	// 
+ 276:     .         	// Since the normalised vega is given by
+ 277:     .         	// 
+ 278:     .         	//      ∂(b(x,s)/∂s = exp(-(h²+t²)/2)/√(2π)
+ 279:     .         	// 
+ 280:     .         	// we thus have
+ 281:     .         	//             bx  :=  Y(h+t) - Y(h-t)
+ 282:     .         	// with
+ 283:     .         	//            Y(z) := Φ(z)/φ(z)
+ 284:     .         	//
+ 285:     .         	// for large negative (t-|h|) by the aid of Abramowitz & Stegun (26.2.12) where Φ(z) = φ(z)/|z|·[1-1/z^2+...].
+ 286:     .         	// We define
+ 287:     .         	//                     r
+ 288:     .         	//         A(h,t) :=  --- · [ Y(h+t) - Y(h-t) ]
+ 289:     .         	//                     t
+ 290:     .         	//
+ 291:     .         	// with r := (h+t)·(h-t) and give an expansion for A(h,t) in q:=(h/r)² expressed in terms of e:=(t/h)² .
+ 292:     .         	//
+ 293:    55 [ 0.11%]	double asymptotic_expansion_of_scaled_normalised_black(double h, double t) {
+ 294:     .         	  // h < η  &&  t < (τ+½) + (|h|-|η|)
+ 295:     .         	  assert(h < -fabs(ETA) && h < TAU + 0.5 - h + ETA);
+ 296:     .         	  // Note that e := (t/h)² ∈ (0,1).
+ 297:     2 [ 0.01%]	  const double e = square(t / h), r = (h + t) * (h - t), q = square(h / r);
+ 298:     .         	#if defined( USE_ORIGINAL_ASYMPTOTIC_EXPANSION )
+ 299:     .         	  // 17th order asymptotic expansion of A(h,t) in q, sufficient for Φ(z) [and thus Y(z)] to have relative accuracy of 1.64E-16 for z <= η  with  η:=ETA.
+ 300:     .         	  const double ω = (2.0 + q * (-6.0E0 - 2.0 * e + 3.0 * q * (1.0E1 + e * (2.0E1 + 2.0 * e) + 5.0 * q * (-1.4E1 + e * (-7.0E1 + e * (-4.2E1 - 2.0 * e)) + 7.0 * q * (1.8E1 + e * (1.68E2 + e * (2.52E2 + e * (7.2E1 + 2.0 * e))) + 9.0 * q * (-2.2E1 + e * (-3.3E2 + e * (-9.24E2 + e * (-6.6E2 + e * (-1.1E2 - 2.0 * e)))) + 1.1E1 * q * (2.6E1 + e * (5.72E2 + e * (2.574E3 + e * (3.432E3 + e * (1.43E3 + e * (1.56E2 + 2.0 * e))))) + 1.3E1 * q * (-3.0E1 + e * (-9.1E2 + e * (-6.006E3 + e * (-1.287E4 + e * (-1.001E4 + e * (-2.73E3 + e * (-2.1E2 - 2.0 * e)))))) + 1.5E1 * q * (3.4E1 + e * (1.36E3 + e * (1.2376E4 + e * (3.8896E4 + e * (4.862E4 + e * (2.4752E4 + e * (4.76E3 + e * (2.72E2 + 2.0 * e))))))) + 1.7E1 * q * (-3.8E1 + e * (-1.938E3 + e * (-2.3256E4 + e * (-1.00776E5 + e * (-1.84756E5 + e * (-1.51164E5 + e * (-5.4264E4 + e * (-7.752E3 + e * (-3.42E2 - 2.0 * e)))))))) + 1.9E1 * q * (4.2E1 + e * (2.66E3 + e * (4.0698E4 + e * (2.3256E5 + e * (5.8786E5 + e * (7.05432E5 + e * (4.0698E5 + e * (1.08528E5 + e * (1.197E4 + e * (4.2E2 + 2.0 * e))))))))) + 2.1E1 * q * (-4.6E1 + e * (-3.542E3 + e * (-6.7298E4 + e * (-4.90314E5 + e * (-1.63438E6 + e * (-2.704156E6 + e * (-2.288132E6 + e * (-9.80628E5 + e * (-2.01894E5 + e * (-1.771E4 + e * (-5.06E2 - 2.0 * e)))))))))) + 2.3E1 * q * (5.0E1 + e * (4.6E3 + e * (1.0626E5 + e * (9.614E5 + e * (4.08595E6 + e * (8.9148E6 + e * (1.04006E7 + e * (6.53752E6 + e * (2.16315E6 + e * (3.542E5 + e * (2.53E4 + e * (6.0E2 + 2.0 * e))))))))))) + 2.5E1 * q * (-5.4E1 + e * (-5.85E3 + e * (-1.6146E5 + e * (-1.77606E6 + e * (-9.37365E6 + e * (-2.607579E7 + e * (-4.01166E7 + e * (-3.476772E7 + e * (-1.687257E7 + e * (-4.44015E6 + e * (-5.9202E5 + e * (-3.51E4 + e * (-7.02E2 - 2.0 * e)))))))))))) + 2.7E1 * q * (5.8E1 + e * (7.308E3 + e * (2.3751E5 + e * (3.12156E6 + e * (2.003001E7 + e * (6.919458E7 + e * (1.3572783E8 + e * (1.5511752E8 + e * (1.0379187E8 + e * (4.006002E7 + e * (8.58429E6 + e * (9.5004E5 + e * (4.7502E4 + e * (8.12E2 + 2.0 * e))))))))))))) + 2.9E1 * q * (-6.2E1 + e * (-8.99E3 + e * (-3.39822E5 + e * (-5.25915E6 + e * (-4.032015E7 + e * (-1.6934463E8 + e * (-4.1250615E8 + e * (-6.0108039E8 + e * (-5.3036505E8 + e * (-2.8224105E8 + e * (-8.870433E7 + e * (-1.577745E7 + e * (-1.472562E6 + e * (-6.293E4 + e * (-9.3E2 - 2.0 * e)))))))))))))) + 3.1E1 * q * (6.6E1 + e * (1.0912E4 + e * (4.74672E5 + e * (8.544096E6 + e * (7.71342E7 + e * (3.8707344E8 + e * (1.14633288E9 + e * (2.07431664E9 + e * (2.33360622E9 + e * (1.6376184E9 + e * (7.0963464E8 + e * (1.8512208E8 + e * (2.7768312E7 + e * (2.215136E6 + e * (8.184E4 + e * (1.056E3 + 2.0 * e))))))))))))))) + 3.3E1 * (-7.0E1 + e * (-1.309E4 + e * (-6.49264E5 + e * (-1.344904E7 + e * (-1.4121492E8 + e * (-8.344518E8 + e * (-2.9526756E9 + e * (-6.49588632E9 + e * (-9.0751353E9 + e * (-8.1198579E9 + e * (-4.6399188E9 + e * (-1.6689036E9 + e * (-3.67158792E8 + e * (-4.707164E7 + e * (-3.24632E6 + e * (-1.0472E5 + e * (-1.19E3 - 2.0 * e))))))))))))))))) * q)))))))))))))))));
+ 301:     .         	#else
+ 302:     .         	#define A0   2
+ 303:     .         	#define A1   -6-2*e
+ 304:     .         	#define A2   30+e*(60+6*e)
+ 305:     .         	#define A3   -2.1E2+e*(-1.05E3+e*(-6.3E2-30*e))
+ 306:     .         	#define A4   1.89E3+e*(1.764E4+e*(2.646E4+e*(7.56E3+2.1E2*e)))
+ 307:     .         	#define A5   -2.079E4+e*(-3.1185E5+e*(-8.7318E5+e*(-6.237E5+e*(-1.0395E5-1.89E3*e))))
+ 308:     .         	#define A6   2.7027E5+e*(5.94594E6+e*(2.675673E7+e*(3.567564E7+e*(1.486485E7+e*(1.62162E6+2.079E4*e)))))
+ 309:     .         	#define A7   -4.05405E6+e*(-1.2297285E8+e*(-8.1162081E8+e*(-1.73918745E9+e*(-1.35270135E9+e*(-3.6891855E8+e*(-2.837835E7-2.7027E5*e))))))
+ 310:     .         	#define A8   6.891885E7+e*(2.756754E9+e*(2.50864614E10+e*(7.88431644E10+e*(9.85539555E10+e*(5.01729228E10+e*(9.648639E9+e*(5.513508E8+4.05405E6*e)))))))
+ 311:     .         	#define A9   -1.30945815E9+e*(-6.678236565E10+e*(-8.013883878E11+e*(-3.4726830138E12+e*(-6.3665855253E12+e*(-5.2090245207E12+e*(-1.8699062382E12+e*(-2.671294626E11+e*(-1.178512335E10-6.891885E7*e))))))))
+ 312:     .         	#define A10   2.749862115E10+e*(1.7415793395E12+e*(2.664616389435E13+e*(1.52263793682E14+e*(3.848890340295E14+e*(4.618668408354E14+e*(2.664616389435E14+e*(7.10564370516E13+e*(7.83710702775E12+e*(2.749862115E11+1.30945815E9*e)))))))))
+ 313:     .         	#define A11   -6.3246828645E11+e*(-4.870005805665E13+e*(-9.2530110307635E14+e*(-6.74147946527055E15+e*(-2.24715982175685E16+e*(-3.71802806872497E16+e*(-3.14602375045959E16+e*(-1.34829589305411E16+e*(-2.77590330922905E15+e*(-2.4350029028325E14+e*(-6.95715115095E12-2.749862115E10*e))))))))))
+ 314:     .         	#define A12   1.581170716125E13+e*(1.454677058835E15+e*(3.36030400590885E16+e*(3.04027505296515E17+e*(1.29211689751018875E18+e*(2.81916414002223E18+e*(3.289024830025935E18+e*(2.067387036016302E18+e*(6.8406188691715875E17+e*(1.12010133530295E17+e*(8.0007238235925E15+e*(1.89740485935E14+6.3246828645E11*e)))))))))))
+ 315:     .         	#define A13   -4.2691609335375E14+e*(-4.624924344665625E16+e*(-1.2764791191277125E18+e*(-1.40412703104048375E19+e*(-7.41067044160255312E19+e*(-2.06151377739125569E20+e*(-3.17155965752500875E20+e*(-2.74868503652167425E20+e*(-1.33392067948845956E20+e*(-3.51031757760120938E19+e*(-4.6804234368016125E18+e*(-2.774954606799375E17+e*(-5.54990921359875E15-1.581170716125E13*e))))))))))))
+ 316:     .         	#define A14   1.238056670725875E16+e*(1.5599514051146025E18+e*(5.06984206662245812E19+e*(6.66322100184665925E20+e*(4.27556680951827302E21+e*(1.47701398874267613E22+e*(2.89721974714909549E22+e*(3.31110828245610914E22+e*(2.2155209831140142E22+e*(8.55113361903654604E21+e*(1.83238577550783129E21+e*(2.02793682664898325E20+e*(1.01396841332449162E19+e*(1.733279339016225E17+4.2691609335375E14*e)))))))))))))
+ 317:     .         	#define A15   -3.8379756792502125E17+e*(-5.56506473491280812E19+e*(-2.10359446979704147E21+e*(-3.25556286992399275E22+e*(-2.49593153360839444E23+e*(-1.04829124411552567E24+e*(-2.55352995361474201E24+e*(-3.72085793241005264E24+e*(-3.28310994036181115E24+e*(-1.74715207352587611E24+e*(-5.49104937393846778E23+e*(-9.76668860977197826E22+e*(-9.11557603578717971E21+e*(-3.89554531443896569E20+e*(-5.75696351887531875E18-1.238056670725875E16*e))))))))))))))
+ 318:     .         	#define A16   1.26653197415257012E19+e*(2.09399953059891594E21+e*(9.10889795810528434E22+e*(1.63960163245895118E24+e*(1.48019591819210871E25+e*(7.42789224401858187E25+e*(2.19979885688242617E26+e*(3.98058840769200926E26+e*(4.47816195865351041E26+e*(3.1425697955463231E26+e*(1.36178024473674001E26+e*(3.55247020366106089E25+e*(5.32870530549159134E24+e*(4.25081904711579936E23+e*(1.57049964794918696E22+e*(2.0264511586441122E20+3.8379756792502125E17*e)))))))))))))))
+ 319:     .         	#define A17   -4.43286190953399544E20+e*(-8.28945177082857147E22+e*(-4.11156807833097145E24+e*(-8.51681959082844086E25+e*(-8.9426605703698629E26+e*(-5.28429942794582808E27+e*(-1.86982902835006224E28+e*(-4.11362386237013693E28+e*(-5.74697451360533836E28+e*(-5.14202982796267117E28+e*(-2.9383027588358121E28+e*(-1.05685988558916562E28+e*(-2.32509174829616435E27+e*(-2.9808868567899543E26+e*(-2.05578403916548572E25+e*(-6.63156141666285717E23+e*(-7.53586524620779224E21-1.26653197415257012E19*e))))))))))))))))
+ 320:     .         	#define A18   1.64015890652757831E22+e*(3.44433370370791445E24+e*(1.93227120778014001E26+e*(4.56384056694737831E27+e*(5.51464068506141545E28+e*(3.79006214355130008E29+e*(1.5791925598130417E30+e*(4.15102044293713818E30+e*(7.05063031116528617E30+e*(7.83403367907254019E30+e*(5.707653109038565E30+e*(2.70718724539378577E30+e*(8.21180131102781683E29+e*(1.54409939181719633E29+e*(1.71144021260526687E28+e*(1.030544644149408E27+e*(2.92768364815172729E25+e*(2.95228603174964096E23+4.43286190953399544E20*e)))))))))))))))))
+ 321:     .         	#define A19   -6.39661973545755542E23+e*(-1.49894122467555382E26+e*(-9.44332971545598906E27+e*(-2.52271808112895708E29+e*(-3.4757449117776742E30+e*(-2.74899824840597868E31+e*(-1.33220684345828198E32+e*(-4.12349737260896802E32+e*(-8.36827407970643511E32+e*(-1.13045105989016755E33+e*(-1.02278905418634207E33+e*(-6.18524605891345204E32+e*(-2.47409842356538081E32+e*(-6.41432924628061693E31+e*(-1.04272347353330226E31+e*(-1.00908723245158283E30+e*(-5.35122017209172713E28+e*(-1.34904710220799844E27+e*(-1.21535774973693553E25-1.64015890652757831E22*e))))))))))))))))))
+ 322:     .         	#define A20   2.62261409153759772E25+e*(6.81879663799775407E27+e*(4.79361403651242111E29+e*(1.43808421095372633E31+e*(2.24101456206955687E32+e*(2.02098767779363674E33+e*(1.12708928184645126E34+e*(4.05752141464722454E34+e*(9.69628279235549981E34+e*(1.56501406473106313E35+e*(1.72151547120416944E35+e*(1.29283770564739997E35+e*(6.59347229880173987E34+e*(2.25417856369290252E34+e*(5.05246919448409185E33+e*(7.17124659862258199E32+e*(6.11185789655333692E31+e*(2.87616842190745267E30+e*(6.47785680609786637E28+e*(5.24522818307519544E26+6.39661973545755542E23*e)))))))))))))))))))
+ 323:     .         	  double ω = 0;
+ 324:     .         	#if defined (UP_TO_20_TERMS)
+ 325:     .         	  const size_t n_thresholds = 16;
+ 326:     .         	  static const double thresholds[16] = { 10.589, 10.876, 11.22, 11.635, 12.143, 12.771, 13.559, 14.566, 15.884, 17.656, 20.129, 23.743, 29.365, 38.892, 57.148, 99.336 };
+ 327:     .         	  switch (std::upper_bound(thresholds, thresholds + n_thresholds, -h - t + TAU) - thresholds) {
+ 328:     .         	    case 0:  ω = q * (A20 + ω); [[fallthrough]];
+ 329:     .         	    case 1:  ω = q * (A19 + ω); [[fallthrough]];
+ 330:     .         	    case 2:  ω = q * (A18 + ω); [[fallthrough]];
+ 331:     .         	    case 3:  ω = q * (A17 + ω); [[fallthrough]];
+ 332:     .         	    case 4:  ω = q * (A16 + ω); [[fallthrough]];
+ 333:     .         	    case 5:  ω = q * (A15 + ω); [[fallthrough]];
+ 334:     .         	    case 6:  ω = q * (A14 + ω); [[fallthrough]];
+ 335:     .         	    case 7:  ω = q * (A13 + ω); [[fallthrough]];
+ 336:     .         	    case 8:  ω = q * (A12 + ω); [[fallthrough]];
+ 337:     .         	    case 9:  ω = q * (A11 + ω); [[fallthrough]];
+ 338:     .         	    case 10:  ω = q * (A10 + ω); [[fallthrough]];
+ 339:     .         	    case 11:  ω = q * (A9 + ω); [[fallthrough]];
+ 340:     .         	    case 12:  ω = q * (A8 + ω); [[fallthrough]];
+ 341:     .         	    case 13:  ω = q * (A7 + ω); [[fallthrough]];
+ 342:     .         	    case 14:  ω = q * (A6 + ω); [[fallthrough]];
+ 343:     .         	    case 15:  ω = q * (A5 + ω); [[fallthrough]];
+ 344:     .         	    default: ω = A0 + q * (A1 + q * (A2 + q * (A3 + q * (A4 + ω))));
+ 345:     .         	  }
+ 346:     .         	#else
+ 347:     .         	  static const double thresholds[12] = { 12.347, 12.958, 13.729, 14.718, 16.016, 17.769, 20.221, 23.816, 29.419, 38.93, 57.171, 99.347 };
+ 348:   230 [ 0.44%]	  switch (std::upper_bound(thresholds, thresholds + 12, -h - t + TAU + 0.5) - thresholds) {
+ 349:     .         	    case 0:  ω = q * (A16 + ω); [[fallthrough]];
+ 350:     .         	    case 1:  ω = q * (A15 + ω); [[fallthrough]];
+ 351:    23 [ 0.05%]	    case 2:  ω = q * (A14 + ω); [[fallthrough]];
+ 352:    98 [ 0.19%]	    case 3:  ω = q * (A13 + ω); [[fallthrough]];
+ 353:   115 [ 0.22%]	    case 4:  ω = q * (A12 + ω); [[fallthrough]];
+ 354:   160 [ 0.31%]	    case 5:  ω = q * (A11 + ω); [[fallthrough]];
+ 355:   255 [ 0.49%]	    case 6:  ω = q * (A10 + ω); [[fallthrough]];
+ 356:   409 [ 0.78%]	    case 7:  ω = q * (A9 + ω); [[fallthrough]];
+ 357:   658 [ 1.26%]	    case 8:  ω = q * (A8 + ω); [[fallthrough]];
+ 358:  1276 [ 2.44%]	    case 9:  ω = q * (A7 + ω); [[fallthrough]];
+ 359:   232 [ 0.45%]	    case 10:  ω = q * (A6 + ω); [[fallthrough]];
+ 360:   545 [ 1.04%]	    case 11:  ω = q * (A5 + ω); [[fallthrough]];
+ 361:  1592 [ 3.04%]	    default: ω = A0 + q * (A1 + q * (A2 + q * (A3 + q * (A4 + ω))));
+ 362:     .         	  }
+ 363:     .         	#endif
+ 364:     .         	#endif
+ 365:     .         	  // Note that vega = ∂(b(x,s)/∂s = exp(-(h²+t²)/2)/√(2π)
+ 366:   281 [ 0.54%]	  const double bx = (t / r) * ω;
+ 367:     .         	  return bx;
+ 368:   313 [ 0.60%]	}
+ 369:     .         	
+ 370:     .         	#if defined( DO_NOT_OPTIMISE_NORMALISED_BLACK_IN_REGIONS_3_AND_4_FOR_CODYS_FUNCTIONS )
+ 371:     .         	double normalised_black_using_erfcx(double h, double t) {
+ 372:     .         	  // Given h = x/s and t = s/2, the normalised Black function can be written as
+ 373:     .         	  //
+ 374:     .         	  //     b(x,s,θ)  =  θ · [ Φ(θ·(x/s+s/2))·exp(x/2)  -   Φ(θ·(x/s-s/2))·exp(-x/2) ]
+ 375:     .         	  //               =  θ · [ Φ(h+θ·t)·exp(x/2)      -   Φ(h-θ·t)·exp(-x/2) ]
+ 376:     .         	  //               =  Φ(h+t)·exp(θ·x/2)    -   Φ(h-t)·exp(-θ·x/2)
+ 377:     .         	  //               =  Φ(h+t)·exp(h·t)      -   Φ(h-t)·exp(-h·t)                       (*)
+ 378:     .         	  // with
+ 379:     .         	  //                h  =  θ·x/s   and   t  =  s/2 .
+ 380:     .         	  // 
+ 381:     .         	  // ⟹  θ can be subsumed into x (or h)
+ 382:     .         	  //
+ 383:     .         	  // It is mentioned in section 4 (and discussion of figures 2 and 3) of George Marsaglia's article "Evaluating the
+ 384:     .         	  // Normal Distribution" (available at http://www.jstatsoft.org/v11/a05/paper) that the error of any cumulative normal
+ 385:     .         	  // function Φ(z) is dominated by the hardware (or compiler implementation) accuracy of exp(-z²/2) which is not
+ 386:     .         	  // reliably more than 14 digits when z is large. The accuracy of Φ(z) typically starts coming down to 14 digits when
+ 387:     .         	  // z is around -8. For the (normalised) Black function, as above in (*), this means that we are subtracting two terms
+ 388:     .         	  // that are each products of terms with about 14 digits of accuracy. The net result, in each of the products, is even
+ 389:     .         	  // less accuracy, and then we are taking the difference of these terms, resulting in even less accuracy. When we are
+ 390:     .         	  // using the asymptotic expansion asymptotic_expansion_of_scaled_normalised_black() invoked in the second branch at the
+ 391:     .         	  // beginning of this function, we are using only *one* exponential instead of 4, and this improves accuracy. It
+ 392:     .         	  // actually improves it a bit more than you would expect from the above logic, namely, almost the full two missing
+ 393:     .         	  // digits (in 64 bit IEEE floating point).  Unfortunately, going higher order in the asymptotic expansion will not
+ 394:     .         	  // enable us to gain more accuracy (by extending the range in which we could use the expansion) since the asymptotic
+ 395:     .         	  // expansion, being a divergent series, can never gain 16 digits of accuracy for z=-8 or just below. The best you can
+ 396:     .         	  // get is about 15 digits (just), for about 35 terms in the series (26.2.12), which would result in an prohibitively
+ 397:     .         	  // long expression in function asymptotic expansion asymptotic_expansion_of_scaled_normalised_black(). In this last branch,
+ 398:     .         	  // here, we therefore take a different tack as follows.
+ 399:     .         	  //     The "scaled complementary error function" is defined as erfcx(z) = exp(z²)·erfc(z). Cody's implementation of this
+ 400:     .         	  // function as published in "Rational Chebyshev approximations for the error function", W. J. Cody, Math. Comp., 1969, pp.
+ 401:     .         	  // 631-638, uses rational functions that theoretically approximates erfcx(x) to at least 18 significant decimal digits,
+ 402:     .         	  // *without* the use of the exponential function when x>4, which translates to about z<-5.66 in Φ(z). To make use of it,
+ 403:     .         	  // we write
+ 404:     .         	  //             Φ(z) = exp(-z²/2)·erfcx(-z/√2)/2
+ 405:     .         	  //
+ 406:     .         	  // to transform the normalised black function to
+ 407:     .         	  //
+ 408:     .         	  //   b   =  ½ · exp(-½(h²+t²)) · [ erfcx(-(h+t)/√2) -  erfcx(-(h-t)/√2) ]
+ 409:     .         	  //
+ 410:     .         	  // which now involves only one exponential, instead of three, when |h|+|t| > 5.66 , and the difference inside the
+ 411:     .         	  // square bracket is between the evaluation of two rational functions, which, typically, according to Marsaglia,
+ 412:     .         	  // retains the full 16 digits of accuracy (or just a little less than that).
+ 413:     .         	  //
+ 414:     .         	  const double b = 0.5 * exp(-0.5 * (h * h + t * t)) * (erfcx_cody(-(1 / SQRT_TWO) * (h + t)) - erfcx_cody(-(1 / SQRT_TWO) * (h - t)));
+ 415:     .         	  return fabs(std::max(b, 0.0));
+ 416:     .         	}
+ 417:     .         	#endif
+ 418:     .         	
+ 419:     .         	inline double Yprime_tail_expansion_rational_function_part(double w) {
+ 420:   239 [ 0.46%]	  return w * (-2.9999999999994663866 + w * (-1.7556263323542206288E2 + w * (-3.4735035445495633334E3 + w * (-2.7805745693864308643E4 + w * (-8.3836021460741980839E4 - 6.6818249032616849037E4 * w))))) / (1 + w * (6.3520877744831739102E1 + w * (1.4404389037604337538E3 + w * (1.4562545638507033944E4 + w * (6.6886794165651675684E4 + w * (1.2569970380923908488E5 + 6.9286518679803751694E4 * w))))));
+ 421:     .         	}
+ 422:     .         	
+ 423:     .         	//
+ 424:     .         	// Y'(h) = 1+h·Y(h) avoiding subtractive cancellation.
+ 425:     .         	//
+ 426:     8 [ 0.02%]	double Yprime(double h) {
+ 427:     .         	  // We copied the thresholds of -0.46875 and -4 from Cody.
+ 428:     .         	  if (h < -4) {
+ 429:     .         	    // Nonlinear-Remez optimized minimax rational function of order (5,6) for g(w) := (Y'(h)/h²-1)/h² with w:=1/h².
+ 430:     .         	    // The relative accuracy of Y'(h) ≈ w·(1+w·g(w)) is better than 9.8E-17 (in perfect arithmetic) on h in [-∞,-4] (i.e., on w in [0,1/16]).
+ 431:     .         	    const double w = 1 / (h * h);
+ 432:   128 [ 0.25%]	    return w * (1 + Yprime_tail_expansion_rational_function_part(w));
+ 433:     .         	  }
+ 434:     2 [ 0.01%]	  if (h <= -0.46875)
+ 435:     .         	    // Remez-optimized minimax rational function of order (7,7) of relative accuracy better than 1.6E-16 (in perfect arithmetic) on h in [-4,-0.46875].
+ 436:    11 [ 0.03%]	    return (1.0000000000594317229 - h * (6.1911449879694112749E-1 - h * (2.2180844736576013957E-1 - h * (4.5650900351352987865E-2 - h * (5.545521007735379052E-3 - h * (3.0717392274913902347E-4 - h * (4.2766597835908713583E-8 + 8.4592436406580605619E-10 * h))))))) / (1 - h * (1.8724286369589162071 - h * (1.5685497236077651429 - h * (7.6576489836589035112E-1 - h * (2.3677701403094640361E-1 - h * (4.6762548903194957675E-2 - h * (5.5290453576936595892E-3 - 3.0822020417927147113E-4 * h)))))));
+ 437:     .         	  return 1 + h * SQRT_PI_OVER_TWO * erfcx_cody(-(1 / SQRT_TWO) * h);
+ 438:    12 [ 0.03%]	}
+ 439:     .         	
+ 440:     .         	// Calculation of the 'scaled normalised Black' function (in analogy to the 'scaled' complementary error function)
+ 441:     .         	// 
+ 442:     .         	//             bx :=  b  /  ∂(b(x,s)/∂s
+ 443:     .         	// 
+ 444:     .         	// with h := θ·x/s, t := s/2, and
+ 445:     .         	//
+ 446:     .         	//              b  =  Φ(h+t)·exp(h·t) - Φ(h-t)·exp(-h·t)
+ 447:     .         	//
+ 448:     .         	//                    exp(-(h²+t²)/2)
+ 449:     .         	//                 =  --------------- ·  [ Y(h+t) - Y(h-t) ]
+ 450:     .         	//                        √(2π)
+ 451:     .         	// and
+ 452:     .         	//        ∂(b(x,s)/∂s = exp(-(h²+t²)/2)/√(2π)
+ 453:     .         	// and
+ 454:     .         	//           Y(z) := Φ(z)/φ(z)
+ 455:     .         	// whence
+ 456:     .         	//             bx  =  Y(h+t) - Y(h-t)
+ 457:     .         	//
+ 458:     .         	// using an expansion for small t to twelfth order in t.
+ 459:     .         	// Theoretically accurate to (better than) precision  ε = 2.23E-16  when  h<=0  and  t < τ  with  τ := 2·ε^(1/16) ≈ 0.21.
+ 460:     .         	// The main bottleneck for precision is the coefficient a:=1+h·Y(h) when |h|>1 .
+ 461:     .         	//
+ 462:     .         	// Note that vega = ∂(b(x,s)/∂s = exp(-(h²+t²)/2)/√(2π)
+ 463:     .         	//
+ 464:    13 [ 0.03%]	double small_t_expansion_of_scaled_normalised_black(double h, double t) {
+ 465:     .         	  // Y(h) := Φ(h)/φ(h) = √(π/2)·erfcx(-h/√2)
+ 466:     .         	  // a := 1+h·Y(h)  --- Note that due to h<0, and h·Y(h) -> -1 (from above) as h -> -∞, we also have that a>0 and a -> 0 as h -> -∞
+ 467:     .         	  // g := h² , ζ := t²
+ 468:     .         	#if defined( USE_ORIGINAL_TAYLOR_EXPANSION )
+ 469:     .         	  const double a = 1 + h * SQRT_PI_OVER_TWO * erfcx_cody(-(1 / SQRT_TWO) * h), g = h * h, ζ = t * t;
+ 470:     .         	  return 2 * t * (a + ζ * ((-1 + 3 * a + a * g) / 6 + ζ * ((-7 + 15 * a + g * (-1 + 10 * a + a * g)) / 120 + ζ * ((-57 + 105 * a + g * (-18 + 105 * a + g * (-1 + 21 * a + a * g))) / 5040 + ζ * ((-561 + 945 * a + g * (-285 + 1260 * a + g * (-33 + 378 * a + g * (-1 + 36 * a + a * g)))) / 362880 + ζ * ((-6555 + 10395 * a + g * (-4680 + 17325 * a + g * (-840 + 6930 * a + g * (-52 + 990 * a + g * (-1 + 55 * a + a * g))))) / 39916800 + ((-89055 + 135135 * a + g * (-82845 + 270270 * a + g * (-20370 + 135135 * a + g * (-1926 + 25740 * a + g * (-75 + 2145 * a + g * (-1 + 78 * a + a * g)))))) * ζ) / 6227020800.0))))));
+ 471:     .         	#else
+ 472:     .         	  const double a = Yprime(h), h² = h * h, t² = t * t;
+ 473:     .         	# define B0 2*a
+ 474:     .         	# define B1 (-1+a*(3+h²))/3
+ 475:     .         	# define B2 (-7-h²+a*(15+h²*(10+h²)))/60
+ 476:     .         	# define B3 (-57+(-18-h²)*h²+a*(105+h²*(105+h²*(21+h²))))/2520
+ 477:     .         	# define B4 (-561+h²*(-285+(-33-h²)*h²)+a*(945+h²*(1260+h²*(378+h²*(36+h²)))))/181440
+ 478:     .         	# define B5 (-6555+h²*(-4680+h²*(-840+(-52-h²)*h²))+a*(10395+h²*(17325+h²*(6930+h²*(990+h²*(55+h²))))))/19958400
+ 479:     .         	# define B6 (-89055+h²*(-82845+h²*(-20370+h²*(-1926+(-75-h²)*h²)))+a*(135135+h²*(270270+h²*(135135+h²*(25740+h²*(2145+h²*(78+h²)))))))/3113510400
+ 480:   408 [ 0.78%]	  return t * (B0 + t² * (B1 + t² * (B2 + t² * (B3 + t² * (B4 + t² * (B5 + B6 * t²))))));
+ 481:     .         	#endif
+ 482:    66 [ 0.13%]	}
+ 483:     .         	
+ 484:     .         	#if defined( DO_NOT_OPTIMISE_NORMALISED_BLACK_IN_REGIONS_3_AND_4_FOR_CODYS_FUNCTIONS )
+ 485:     .         	double normalised_black_using_norm_cdf(double θx, double s) {
+ 486:     .         	  //     b(x,s,θ)  =  θ · [ Φ(θ·(x/s+s/2))·exp(x/2)  -   Φ(θ·(x/s-s/2))·exp(-x/2) ]
+ 487:     .         	  //               =  θ · [ Φ(h+θ·t)·exp(x/2)      -   Φ(h-θ·t)·exp(-x/2) ]
+ 488:     .         	  //               =  Φ(h+t)·exp(θ·x/2)    -   Φ(h-t)·exp(-θ·x/2)
+ 489:     .         	  // with
+ 490:     .         	  //              h  =  θ·x/s   and   t  =  s/2
+ 491:     .         	  const double h = θx / s, t = 0.5 * s, b_max = exp(0.5 * θx), b = norm_cdf(h + t) * b_max - norm_cdf(h - t) / b_max;
+ 492:     .         	  return fabs(std::max(b, 0.0));
+ 493:     .         	}
+ 494:     .         	#endif
+ 495:     .         	
+ 496:     .         	//
+ 497:     .         	// Introduced on 2017-02-18
+ 498:     .         	//
+ 499:     .         	//     b(x,s,θ)  =  θ · [ Φ(θ·(x/s+s/2))·exp(x/2)  -   Φ(θ·(x/s-s/2))·exp(-x/2) ]
+ 500:     .         	//               =  θ · [ Φ(h+θ·t)·exp(x/2)      -   Φ(h-θ·t)·exp(-x/2) ]
+ 501:     .         	//               =  Φ(h+t)·exp(θ·x/2)    -   Φ(h-t)·exp(-θ·x/2)
+ 502:     .         	// with
+ 503:     .         	//              h  =  θ·x/s ,       t  =  s/2 ,
+ 504:     .         	//
+ 505:     .         	// ⟹  θ can be subsumed into x (or h)
+ 506:     .         	//
+ 507:     .         	//     b(x,s)  =  ½ · exp(-u²-v²) · [ erfcx(u+v) -  erfcx(u-v) ]
+ 508:     .         	//             =  ½ · [ exp(θx/2)·erfc(u+v)     -  exp(-θx/2)·erfc(u-v)    ]
+ 509:     .         	//             =  ½ · [ exp(θx/2)·erfc(u+v)     -  exp(-u²-v²)·erfcx(u-v) ]
+ 510:     .         	//             =  ½ · [ exp(-u²-v²)·erfcx(u+v) -  exp(-θx/2)·erfc(u-v)    ]
+ 511:     .         	// and
+ 512:     .         	//              u  = -h/√2  and   v  =  -t/√2 .
+ 513:     .         	//
+ 514:     .         	// Cody's erfc() and erfcx() functions each, for some values of their argument, involve the evaluation
+ 515:     .         	// of the exponential function exp(). The normalised Black function requires additional evaluation(s)
+ 516:     .         	// of the exponential function irrespective of which of the above formulations is used. However, the total
+ 517:     .         	// number of exponential function evaluations can be minimised by a judicious choice of one of the above
+ 518:     .         	// formulations depending on the input values and the branch logic in Cody's erfc() and erfcx().
+ 519:     .         	//
+ 520:    70 [ 0.14%]	double normalised_black_with_optimal_use_of_codys_functions(double θx, double s) {
+ 521:    56 [ 0.11%]	  const double codys_threshold = 0.46875, h = θx / s, t = 0.5 * s, q₁ = -(1 / SQRT_TWO) * (h + t), q₂ = -(1 / SQRT_TWO) * (h - t);
+ 522:     .         	  double two_b;
+ 523:     .         	  // Note: the absence of fabs() around q₁ and q₂ is no accident.
+ 524:    56 [ 0.11%]	  if (q₁ < codys_threshold)
+ 525:    12 [ 0.03%]	    if (q₂ < codys_threshold)
+ 526:     7 [ 0.02%]	      two_b = exp(0.5 * θx) * erfc_cody(q₁) - exp(-0.5 * θx) * erfc_cody(q₂);
+ 527:     .         	    else
+ 528:    73 [ 0.14%]	      two_b = exp(0.5 * θx) * erfc_cody(q₁) - exp(-0.5 * (h * h + t * t)) * erfcx_cody(q₂);
+ 529:     .         	  else
+ 530:     1 [ 0.01%]	    if (q₂ < codys_threshold)
+ 531:     1 [ 0.01%]	      two_b = exp(-0.5 * (h * h + t * t)) * erfcx_cody(q₁) - exp(-0.5 * θx) * erfc_cody(q₂);
+ 532:     .         	    else
+ 533:    14 [ 0.03%]	      two_b = exp(-0.5 * (h * h + t * t)) * (erfcx_cody(q₁) - erfcx_cody(q₂));
+ 534:    49 [ 0.10%]	  return std::max(0.5 * two_b, 0.0);
+ 535:    63 [ 0.13%]	}
+ 536:     .         	
+ 537:     .         	// ∂b(x,s)/∂s = b'(s) = exp(-½·((x/s)²+(s/2)²) / √(2π)
+ 538:     .         	inline double normalised_vega(double x, double s) {
+ 539:     .         	#if defined( SAFEGUARD_VEGA_AGAINST_ZERO_VOLATILITY )
+ 540:     .         	  const double ax = fabs(x);
+ 541:     .         	  if (ax <= 0)
+ 542:     .         	    return (1 / SQRT_TWO_PI) * exp(-0.125 * s * s);
+ 543:     .         	  if (s <= 0 || s <= ax * SQRT_DBL_MIN) {
+ 544:     .         	#if defined(LOG_VEGA_OVERFLOW)
+ 545:     .         	    printf("normalised_vega(x = %g, s = %g)\n", x, s);
+ 546:     .         	#endif
+ 547:     .         	    return 0;
+ 548:     .         	  }
+ 549:     .         	#else
+ 550:     .         	  assert(s > 0);
+ 551:     .         	#endif
+ 552:     .         	  const double h = x / s, t = 0.5 * s;
+ 553:  1101 [ 2.10%]	  return (1 / SQRT_TWO_PI) * exp(-0.5 * (h * h + t * t));
+ 554:     .         	}
+ 555:     .         	
+ 556:     .         	inline double inv_normalised_vega(double x, double s) {
+ 557:     .         	#if defined( SAFEGUARD_VEGA_AGAINST_ZERO_VOLATILITY )
+ 558:     .         	  const double ax = fabs(x);
+ 559:     .         	  if (ax <= 0)
+ 560:     .         	    return SQRT_TWO_PI * exp(0.125 * s * s);
+ 561:     .         	  if (s <= 0 || s <= ax * SQRT_DBL_MIN) {
+ 562:     .         	#if defined(LOG_VEGA_OVERFLOW)
+ 563:     .         	    printf("inv_normalised_vega(x = %g, s = %g)\n", x, s);
+ 564:     .         	#endif
+ 565:     .         	    return DBL_MAX;
+ 566:     .         	  }
+ 567:     .         	#else
+ 568:     .         	  assert(s > 0);
+ 569:     .         	#endif
+ 570:    15 [ 0.03%]	  const double h = x / s, t = 0.5 * s;
+ 571:   132 [ 0.26%]	  return SQRT_TWO_PI * exp(0.5 * (h * h + t * t));
+ 572:     .         	}
+ 573:     .         	
+ 574:     .         	inline double ln_normalised_vega(double x, double s) {
+ 575:     .         	#if defined( SAFEGUARD_VEGA_AGAINST_ZERO_VOLATILITY )
+ 576:     .         	  if (fabs(x) <= 0)
+ 577:     .         	    return (-(LN_TWO_PI / 2) - 0.125 * (s * s));
+ 578:     .         	  if (s <= 0) {
+ 579:     .         	#if defined(LOG_VEGA_OVERFLOW)
+ 580:     .         	    printf("ln_normalised_vega(x = %g, s = %g)\n", x, s);
+ 581:     .         	#endif
+ 582:     .         	    return -DBL_MAX;
+ 583:     .         	  }
+ 584:     .         	#else
+ 585:     .         	  assert(s > 0);
+ 586:     .         	#endif
+ 587:     .         	  const double h = x / s, t = 0.5 * s;
+ 588:   719 [ 1.38%]	  return -(LN_TWO_PI * 0.5) - 0.5 * (h * h + t * t);
+ 589:     .         	}
+ 590:     .         	
+ 591:     .         	#define SPECIALISE_EXACT_ATM_CASE
+ 592:     .         	
+ 593:     .         	//  b(x,s,θ)  =  θ·[ exp(θx/2)·Φ(θ·(x/s+s/2)) - exp(-θx/2)·Φ(θ·(x/s-s/2)) ]
+ 594:     .         	//            =  exp(θx/2)·Φ(θx/s+s/2) - exp(-θx/2)·Φ(θx/s-s/2)
+ 595:     .         	//  ⟹  θ can be subsumed into x.
+ 596:     .         	// NOTE: this function requires s > 0 and θx ≤ 0 or even θx < 0 when SPECIALISE_EXACT_ATM_CASE is defined.
+ 597:     9 [ 0.02%]	double normalised_black(double θx, double s) {
+ 598:     .         	#if defined( SPECIALISE_EXACT_ATM_CASE )
+ 599:     .         	  assert(θx < 0);
+ 600:     .         	#else
+ 601:     .         	  assert(θx <= 0);
+ 602:     .         	#endif
+ 603:     .         	//  if (VOLATILITY_IS_CONSIDERED_ZERO(θx, s)) return 0;
+ 604:     .         	  assert(s > 0);
+ 605:    10 [ 0.02%]	  if (IS_REGION_I(θx, s))
+ 606:     .         	    return asymptotic_expansion_of_scaled_normalised_black(θx / s, 0.5 * s) * normalised_vega(θx, s);
+ 607:    30 [ 0.06%]	  if (IS_REGION_II(θx, s))
+ 608:    11 [ 0.03%]	    return small_t_expansion_of_scaled_normalised_black(θx / s, 0.5 * s) * normalised_vega(θx, s);
+ 609:     .         	#if defined( DO_NOT_OPTIMISE_NORMALISED_BLACK_IN_REGIONS_3_AND_4_FOR_CODYS_FUNCTIONS )
+ 610:     .         	  if (IS_REGION_III(θx, s))
+ 611:     .         	    return normalised_black_using_norm_cdf(θx, s);
+ 612:     .         	  return normalised_black_using_erfcx(θx / s, 0.5 * s);
+ 613:     .         	#else
+ 614:     .         	  return normalised_black_with_optimal_use_of_codys_functions(θx, s);
+ 615:     .         	#endif
+ 616:    15 [ 0.03%]	}
+ 617:     .         	
+ 618:     .         	// NOTE: this function requires s > 0 and θx ≤ 0 or even θx < 0 when SPECIALISE_EXACT_ATM_CASE is defined.
+ 619:   730 [ 1.40%]	std::tuple<double, double> scaled_normalised_black_and_ln_vega(double θx, double s) {
+ 620:     .         	#if defined( SPECIALISE_EXACT_ATM_CASE )
+ 621:     .         	  assert(θx < 0);
+ 622:     .         	#else
+ 623:     .         	  assert(θx <= 0);
+ 624:     .         	#endif
+ 625:     .         	//  if (VOLATILITY_IS_CONSIDERED_ZERO(θx, s)) return { 0, -DBL_MAX };
+ 626:     .         	  assert(s > 0);
+ 627:   488 [ 0.94%]	  if (IS_REGION_I(θx, s))
+ 628:    86 [ 0.17%]	    return { asymptotic_expansion_of_scaled_normalised_black(θx / s, 0.5 * s), ln_normalised_vega(θx, s) };
+ 629:     .         	  if (IS_REGION_II(θx, s))
+ 630:     8 [ 0.02%]	    return { small_t_expansion_of_scaled_normalised_black(θx / s, 0.5 * s), ln_normalised_vega(θx, s) };
+ 631:     .         	  const double ln_vega = ln_normalised_vega(θx, s);
+ 632:     .         	#if defined( DO_NOT_OPTIMISE_NORMALISED_BLACK_IN_REGIONS_3_AND_4_FOR_CODYS_FUNCTIONS )
+ 633:     .         	  if (IS_REGION_III(θx, s))
+ 634:     .         	    return { normalised_black_using_norm_cdf(θx, s) * exp(-ln_vega), ln_vega };
+ 635:     .         	  return { normalised_black_using_erfcx(θx / s, 0.5 * s) * exp(-ln_vega), ln_vega };
+ 636:     .         	#else
+ 637:    12 [ 0.03%]	  return { normalised_black_with_optimal_use_of_codys_functions(θx, s) * exp(-ln_vega), ln_vega };
+ 638:     .         	#endif
+ 639:    76 [ 0.15%]	}
+ 640:     .         	
+ 641:     .         	// ∂²b(x,s)/∂s²
+ 642:     .         	double normalised_volga(double x, double s) {
+ 643:     .         	  const double ax = fabs(x);
+ 644:     .         	  if (ax <= 0) return (1 / SQRT_TWO_PI) * exp(-0.125 * s * s);
+ 645:     .         	  if (s <= 0 || s <= ax * SQRT_DBL_MIN) return 0;
+ 646:     .         	  const double h = x / s, t = 0.5 * s, h² = h * h, t² = t * t;
+ 647:     .         	  return (1 / SQRT_TWO_PI) * exp(-0.5 * (h² + t²)) * (h² - t²) / s;
+ 648:     .         	}
+ 649:     .         	
+ 650:     .         	#ifdef COMPUTE_LOWER_MAP_DERIVATIVES_INDIVIDUALLY
+ 651:     .         	double f_lower_map(const double x, const double s) {
+ 652:     .         	#if defined( POSITIVE_DENORMALISATION_CUTOFF )
+ 653:     .         	  if (is_below_horizon(x)) return 0;
+ 654:     .         	  if (is_below_horizon(s)) return 0;
+ 655:     .         	#endif
+ 656:     .         	  const double z = SQRT_ONE_OVER_THREE * fabs(x) / s, Phi = norm_cdf(-z);
+ 657:     .         	  return TWO_PI_OVER_SQRT_TWENTY_SEVEN * fabs(x) * (Phi * Phi * Phi);
+ 658:     .         	}
+ 659:     .         	double d_f_lower_map_d_beta(const double x, const double s) {
+ 660:     .         	#if defined( POSITIVE_DENORMALISATION_CUTOFF )
+ 661:     .         	  if (is_below_horizon(s)) return 1;
+ 662:     .         	#endif
+ 663:     .         	  const double z = SQRT_ONE_OVER_THREE * fabs(x) / s, y = z * z, Phi = norm_cdf(-z);
+ 664:     .         	  return TWO_PI * y * (Phi * Phi) * exp(y + 0.125 * s * s);
+ 665:     .         	}
+ 666:     .         	double d2_f_lower_map_d_beta2(const double x, const double s) {
+ 667:     .         	  const double ax = fabs(x), z = SQRT_ONE_OVER_THREE * ax / s, y = z * z, s2 = s * s, Phi = norm_cdf(-z), phi = norm_pdf(z);
+ 668:     .         	  return PI_OVER_SIX * y / (s2 * s) * Phi * (8 * SQRT_THREE * s * ax + (3 * s2 * (s2 - 8) - 8 * x * x) * Phi / phi) * exp(2 * y + 0.25 * s2);
+ 669:     .         	}
+ 670:     .         	void compute_f_lower_map_and_first_two_derivatives(const double x, const double s, double& f, double& fp, double& fpp) {
+ 671:     .         	  f = f_lower_map(x, s);
+ 672:     .         	  fp = d_f_lower_map_d_beta(x, s);
+ 673:     .         	  fpp = d2_f_lower_map_d_beta2(x, s);
+ 674:     .         	}
+ 675:     .         	#else
+ 676:     .         	inline void compute_f_lower_map_and_first_two_derivatives(const double x, const double s, double& f, double& fp, double& fpp) {
+ 677:   177 [ 0.34%]	  const double ax = fabs(x), z = SQRT_ONE_OVER_THREE * ax / s, y = z * z, s2 = s * s, Phi = 0.5 * erfc_cody((1 / SQRT_TWO) * z) /* = norm_cdf(-z) */, phi = norm_pdf(z);
+ 678:   656 [ 1.26%]	  fpp = PI_OVER_SIX * y / (s2 * s) * Phi * (8 * SQRT_THREE * s * ax + (3 * s2 * (s2 - 8) - 8 * x * x) * Phi / phi) * exp(2 * y + 0.25 * s2);
+ 679:     .         	#if defined( POSITIVE_DENORMALISATION_CUTOFF )
+ 680:     .         	  if (is_below_horizon(s)) {
+ 681:     .         	    fp = 1;
+ 682:     .         	    f = 0;
+ 683:     .         	  } else
+ 684:     .         	#endif
+ 685:     .         	  {
+ 686:    11 [ 0.03%]	    const double Phi2 = Phi * Phi;
+ 687:   104 [ 0.20%]	    fp = TWO_PI * y * Phi2 * exp(y + 0.125 * s * s);
+ 688:     .         	#if defined( POSITIVE_DENORMALISATION_CUTOFF )
+ 689:     .         	    if (is_below_horizon(x)) f = 0; else
+ 690:     .         	#endif
+ 691:     .         	      f = TWO_PI_OVER_SQRT_TWENTY_SEVEN * ax * (Phi2 * Phi);
+ 692:     .         	  }
+ 693:     .         	}
+ 694:     .         	#endif
+ 695:     .         	
+ 696:     .         	// Formula (4.38)
+ 697:     .         	inline double inverse_f_lower_map(const double x, const double f) {
+ 698:     .         	  // Caution: this can result in unnecessary underflow when f ≈ DBL_MIN and |x| is large. It also triggers 'unsafe-math-optimizations' issues with g++, exposed when -Ofast or -fast-math is used.
+ 699:     .         	  //   return is_below_horizon(f) ? 0 : fabs(x / (SQRT_THREE * inverse_norm_cdf(std::pow(f / (TWO_PI_OVER_SQRT_TWENTY_SEVEN * fabs(x)), 1. / 3.))));
+ 700:     .         	  // Second caution: do *NOT* attempt to contract the two cubic roots into one. This leads to catastrophic underflow when f ≈ DBL_MIN and |x| > 1.
+ 701:     .         	#if defined( POSITIVE_DENORMALISATION_CUTOFF )
+ 702:     .         	  if (is_below_horizon(f)) return DBL_MIN;
+ 703:     .         	#endif
+ 704:   153 [ 0.30%]	  return fabs(x / (SQRT_THREE * inverse_norm_cdf(SQRT_THREE_OVER_THIRD_ROOT_TWO_PI * std::cbrt(f) / std::cbrt(fabs(x)))));
+ 705:     .         	}
+ 706:     .         	
+ 707:     .         	#ifdef COMPUTE_UPPER_MAP_DERIVATIVES_INDIVIDUALLY
+ 708:     .         	double f_upper_map(const double s) {
+ 709:     .         	  return norm_cdf(-0.5 * s);
+ 710:     .         	}
+ 711:     .         	double d_f_upper_map_d_beta(const double x, const double s) {
+ 712:     .         	#if defined( POSITIVE_DENORMALISATION_CUTOFF )
+ 713:     .         	  if (is_below_horizon(x)) return -0.5;
+ 714:     .         	#endif
+ 715:     .         	  return -0.5 * exp(0.5 * square(x / s));
+ 716:     .         	}
+ 717:     .         	double d2_f_upper_map_d_beta2(const double x, const double s) {
+ 718:     .         	#if defined( POSITIVE_DENORMALISATION_CUTOFF )
+ 719:     .         	  if (is_below_horizon(x)) return 0;
+ 720:     .         	#endif
+ 721:     .         	  const double w = square(x / s);
+ 722:     .         	  return SQRT_PI_OVER_TWO * exp(w + 0.125 * s * s) * w / s;
+ 723:     .         	}
+ 724:     .         	void compute_f_upper_map_and_first_two_derivatives(const double x, const double s, double& f, double& fp, double& fpp) {
+ 725:     .         	  f = f_upper_map(s);
+ 726:     .         	  fp = d_f_upper_map_d_beta(x, s);
+ 727:     .         	  fpp = d2_f_upper_map_d_beta2(x, s);
+ 728:     .         	}
+ 729:     .         	#else
+ 730:     .         	inline void compute_f_upper_map_and_first_two_derivatives(const double x, const double s, double& f, double& fp, double& fpp) {
+ 731:    27 [ 0.06%]	  f = 0.5 * erfc_cody((0.5 / SQRT_TWO) * s) /* = norm_cdf(-0.5 * s) */;
+ 732:     .         	#if defined( SAFEGUARD_AGAINST_NON_POSITIVE_VOLATILITY )
+ 733:     .         	  if (is_below_horizon(x)) { fp = -0.5; fpp = 0; return; }
+ 734:     .         	#endif
+ 735:     .         	  const double w = square(x / s);
+ 736:    44 [ 0.09%]	  fp = -0.5 * exp(0.5 * w);
+ 737:   160 [ 0.31%]	  fpp = SQRT_PI_OVER_TWO * exp(w + 0.125 * s * s) * w / s;
+ 738:     .         	}
+ 739:     .         	#endif
+ 740:     .         	
+ 741:     .         	inline double inverse_f_upper_map(double f) { return -2. * inverse_norm_cdf(f); }
+ 742:     .         	
+ 743:     .         	// Extensive testing indicates that this is never needed.
+ 744:     .         	#if defined( SAFEGUARD_STEP_AGAINST_BRACKETS )
+ 745:     .         	inline double take_step(const double x_min, const double x_max, double x, double& dx) {
+ 746:     .         	  const double new_x = x + dx;
+ 747:     .         	  if ( new_x > x_max ) {
+ 748:     .         	    dx = x_max-x;
+ 749:     .         	    return x_max;
+ 750:     .         	  }
+ 751:     .         	  if ( new_x < x_min ) {
+ 752:     .         	    dx = x_min-x;
+ 753:     .         	    return x_min;
+ 754:     .         	  }
+ 755:     .         	  return new_x;
+ 756:     .         	}
+ 757:     .         	#endif
+ 758:     .         	
+ 759:     .         	//
+ 760:     .         	// Introduced on 2023-12-10
+ 761:     .         	// 
+ 762:     .         	//    b̄(x,s,θ)          :=   bₘₐₓ(x,θ)   -  b(x,s,θ)
+ 763:     .         	//                       =   exp(θ·x/2)  -  θ·[ exp(θx/2)·Φ(θ·(x/s+s/2)) - exp(-θx/2)·Φ(θ·(x/s-s/2)) ]            using  bₘₐₓ = exp(θ·x/2)
+ 764:     .         	//
+ 765:     .         	//                           ⎧   exp(θx/2)·[1-Φ(x/s+s/2)] + exp(-θx/2)·Φ(x/s-s/2)                                  when θ = +1
+ 766:     .         	//                       =   ⎨ 
+ 767:     .         	//                           ⎩   exp(θx/2)·Φ(-x/s-s/2)    + exp(-θx/2)·[1-Φ(-x/s+s/2)]                             when θ = -1
+ 768:     .         	// using  1-Φ(z) = Φ(-z)
+ 769:     .         	//                       =   exp(θx/2)·Φ(-x/s-s/2) + exp(-θx/2)·Φ(x/s-s/2)                            (1)          for both θ = ±1
+ 770:     .         	// 
+ 771:     .         	// Note: no subtractive cancellation, and no dependency on θ = ±1 !
+ 772:     .         	// 
+ 773:     .         	//    b̄(x,s)    =   ½ · [ erfc((s/2+x/s)/√2)·exp(θx/2) + erfc((s/2-x/s)/√2)·exp(-θx/2) ]              (2)          using  Φ(z) = erfc(-z/√2)/2
+ 774:     .         	//
+ 775:     .         	// using erfc(z) = erfcx(z)·exp(-z²)
+ 776:     .         	// 
+ 777:     .         	//    b̄(x,s)    =   ½ · ( erfcx((s/2+x/s)/√2)·exp(-½((x/s)²+x+(s/2)²))·exp(θx/2) + erfcx((s/2-x/s)/√2)·exp(-½((x/s)²-x+(s/2)²))·exp(-θx/2) )
+ 778:     .         	//
+ 779:     .         	//              =   ½ · ( erfcx((s/2+x/s)/√2) + erfcx((s/2-x/s)/√2) ) · exp(-½((x/s)²+(s/2)²))
+ 780:     .         	//
+ 781:     .         	//              =   √(π/2) · [ erfcx((s/2+x/s)/√2) + erfcx((s/2-x/s)/√2) ] · ∂b(x,s)/∂s
+ 782:     .         	//
+ 783:     .         	inline double complementary_normalised_black(double h /* = x/s */, double t /* = s/2 */) {
+ 784:     .         	  //    b̄(x,s)    =   ½ · ( erfcx((s/2+x/s)/√2) + erfcx((s/2-x/s)/√2) ) · exp(-½((x/s)²+(s/2)²))
+ 785:     .         	  //    b̄(x,s)    =   ½ · ( erfcx((t+h)/√2) + erfcx((t-h)/√2) ) · exp(-½(t²+h²))
+ 786:     .         	  return 0.5 * (erfcx_cody((t + h) * (1 / SQRT_TWO)) + erfcx_cody((t - h) * (1 / SQRT_TWO))) * exp(-0.5 * (t * t + h * h));
+ 787:     .         	}
+ 788:     .         	
+ 789:     .         	// f(x) := 1 - erfcx(x)  ≈  2/√π·x - x² + 4/(3√π)·x³ + ... for small x.
+ 790:     .         	inline double one_minus_erfcx(double x) {
+ 791:     7 [ 0.02%]	  if (x < -1. / 5. || x > 1. / 3.)
+ 792:    79 [ 0.16%]	    return 1 - erfcx_cody(x);
+ 793:     .         	  // Remez-optimized minimax rational function of order (4,5) for g(x) := (2/√π-f(x)/x)/x.   2/√π = 1.128379167095512573896.
+ 794:     .         	  // The relative accuracy of f(x) ≈ x·(2/√π-x·g(x)) is better than 2.5E-17 (in perfect arithmetic) on x in [-1/5,1/3].
+ 795:   125 [ 0.24%]	  return x * (1.128379167095512573896 - x * (1.0000000000000002 + x * (1.1514967181784756 + x * (5.7689001208873741E-1 + x * (1.4069188744609651E-1 + 1.4069285713634565E-2 * x)))) / (1 + x * (1.9037494962421563 + x * (1.5089908593742723 + x * (6.2486081658640257E-1 + x * (1.358008134514386E-1 + 1.2463320728346347E-2 * x))))));
+ 796:     .         	}
+ 797:     .         	
+ 798:     .         	#define USE_UNIVARIATE_RATIONAL_FUNCTION_APPROXIMATIONS_FOR_BL_AND_BU_OVER_BMAX
+ 799:     .         	
+ 800:     .         	#if defined( USE_UNIVARIATE_RATIONAL_FUNCTION_APPROXIMATIONS_FOR_BL_AND_BU_OVER_BMAX )
+ 801:     .         	
+ 802:     .         	//  s_c        :=   √(2|x|)
+ 803:     .         	//  b_c(x)     :=   b(-|x|,s_c)
+ 804:     .         	//  vega(x,s)  :=   ∂b(x,s)/∂s
+ 805:     .         	//  sₗ          :=   s_c - b_c(x)/vega(x,s_c)
+ 806:     .         	//              =   √(-2x) - √(π/2) · (1 - erfcx(√(-x)))
+ 807:     .         	//  bₗ          :=   b(-|x|,sₗ)
+ 808:     .         	//  sᵤ         :=  s_c + (bₘₐₓ-b_c(x))/vega(x,s_c)
+ 809:     .         	//              =  √(-2x) + √(π/2) · (1 + erfcx(√(-x)))
+ 810:     .         	//  bᵤ         :=  b(-|x|,sᵤ)
+ 811:     .         	//  bₘₐₓ       :=  exp(-|x|/2)
+ 812:     .         	// 
+ 813:     .         	// Note that bₗ=bₗ(x), bᵤ=bᵤ(x), and bₘₐₓ=bₘₐₓ(x) are all univariate functions.
+ 814:     .         	
+ 815:     .         	// Within the "Let's Be Rational" algorithm, the functions bₗ_over_bₘₐₓ and bᵤ_over_bₘₐₓ are only
+ 816:     .         	// used as an acceleration for bₗ and bᵤ which in turn are only used to determine branches and for
+ 817:     .         	// the initial guess interpolation logic. Thus, if their accuracy is only (relative) 1.E-15 or even
+ 818:     .         	// 1.E-14 is perfectly sufficient. Recall that the initial guess accuracy can be as low as 1E-4, so,
+ 819:     .         	// any amount of noise that is 1E-10 smaller than that is of zero subsequent significance.
+ 820:     .         	
+ 821:     .         	// Nevertheless, we prefer the four-branch versions further down since they are slightly faster than the
+ 822:     .         	// two-branch versions (on the hardware used for testing, i.e., a 12th Gen Intel(R) Core(TM) i5-12500H).
+ 823:     .         	
+ 824:     .         	#if defined( BL_AND_BU_OVER_BMAX_IN_TWO_BRANCHES )
+ 825:     .         	
+ 826:     .         	inline double bₗ_over_bₘₐₓ(const double s_c /* = √|2x| */) {
+ 827:     .         	  if (s_c >= 2.82842712474619 /* = √8 */) {
+ 828:     .         	    // x = -1/(2·y²), y = 1/√|2x|, output is f(x) = bₗ(x)/bₘₐₓ(x).
+ 829:     .         	    // Nonlinear-Remez optimized minimax rational function of order (7,7) for g(y) := ((f - Φ(-√(π/2)) )·4·exp(π/4)/y+√(π/2))/y .
+ 830:     .         	    // Accuracy better than 2.3E-16 in perfect arithmetic on x in [-∞,-4], i.e., y in [0,1/√8].
+ 831:     .         	    const double y = 1 / s_c, g = (4.6053948312498956145E-2 + y * (2.2003742013556747214 + y * (1.7600379430086971755E1 + y * (9.1467986769463622162E1 + y * (2.9140932094514209454E2 + y * (5.7000507935678940271E2 + y * (5.6859094292134607288E2 - 2.2892636835707606708E0 * y))))))) / (1 + y * (8.5913225035477097129 + y * (5.0371467968780246369E1 + y * (1.8369076530154652307E2 + y * (4.6283633310610371326E2 + y * (7.8579932950540139912E2 + y * (8.0484923741700038479E2 + 4.4439123028067025538E2 * y)))))));
+ 832:     .         	    // f = Φ(-√(π/2)) + exp(-π//4)/4 · y · ( -√(π/2) + y · g )
+ 833:     .         	    return 0.1050457027219686376856 + 0.1139845319414990591915 * y * (-1.253314137315500251208 + y * g);
+ 834:     .         	  }
+ 835:     .         	  // x = -y²/2, y = √|2x| = s_c, output is f(x) = bₗ(x)/bₘₐₓ(x).
+ 836:     .         	  // For small |x|, i.e., small y, we have f ≈ (exp(-1/π)/4-Φ(-√(π/2))/2)·y² + exp(-1/π)/(3·√(2π))·y³ + O(y⁴).
+ 837:     .         	  //   c₂ := (exp(-1/π)/4-Φ(-√(π/2))/2) =  0.07560996640296361767172
+ 838:     .         	  //   c₃ := exp(-1/π)/(3·√(2π))        = -0.09672719281339436290858
+ 839:     .         	  // Nonlinear-Remez optimized minimax rational function of order (7,7) for g(y) := ((f/y²-c₂)/y-c₃)/y .
+ 840:     .         	  // Accuracy better than 1E-15 in perfect arithmetic on x in [-4,0], i.e., y in [0,√8].
+ 841:     .         	  const double g = (8.074107237288007116E-2 + s_c * (2.1690496514582263229E-1 + s_c * (2.3522503078524868067E-1 + s_c * (1.3517614695211948957E-1 + s_c * (4.4661233146407726342E-2 + s_c * (8.2133824762408676406E-3 + s_c * (6.7102169991726196873E-4 - 1.7070712794798401108E-10 * s_c))))))) / (1 + s_c * (3.331190548448924999 + s_c * (4.7356539912342037297 + s_c * (3.7552272118554961136 + s_c * (1.8061741297788241057 + s_c * (5.3232597992823920757E-1 + s_c * (9.0336639624394764651E-2 + 6.9371970943430933891E-3 * s_c)))))));
+ 842:     .         	  // f = y²·(c₂+y·(c₃+y·g))
+ 843:     .         	  return (s_c * s_c) * (0.07560996640296361767172 + s_c * (-0.09672719281339436290858 + s_c * g));
+ 844:     .         	}
+ 845:     .         	
+ 846:     .         	inline double bᵤ_over_bₘₐₓ(const double s_c /* = √|2x| */) {
+ 847:     .         	  if (s_c >= 2.449489742783178098197 /* = √6 */) {
+ 848:     .         	    // x = -1/(2·y²), y = 1/√|2x|, output is f(x) = bᵤ(x)/bₘₐₓ(x).
+ 849:     .         	    // Nonlinear-Remez optimized minimax rational function of order (7,7) for g(y) := ((f - Φ(√(π/2)) )·4·exp(π/4)/y+√(π/2))/y .
+ 850:     .         	    // Accuracy better than 7.8E-17 in perfect arithmetic on x in [-∞,-3], i.e., y in [0,1/√6].
+ 851:     .         	    const double y = 1 / s_c, g = (-4.6053948172126087243E-2 + y * (1.3751630820772591756 + y * (1.455319886249397753E1 + y * (8.4880892200802385788E1 + y * (2.9836801628056627321E2 + y * (6.1696928351291694236E2 + y * (6.5892809576774076373E2 - 1.2291897122716543832E0 * y))))))) / (1 + y * (9.3270349037904060715 + y * (5.4363781465880728853E1 + y * (2.0304204599521774403E2 + y * (5.0796471791232277633E2 + y * (8.6988303136901841628E2 + y * (8.8812383339606771272E2 + 5.2060847522792563067E2 * y)))))));
+ 852:     .         	    // f = Φ(√(π/2)) + exp(-π//4)/4 · y · ( -√(π/2) + y · g )
+ 853:     .         	    return 0.8949542972780313623144 + 0.1139845319414990591915 * y * (-1.253314137315500251208 + y * g);
+ 854:     .         	  }
+ 855:     .         	  // x = -y²/2, y = √|2x| = s_c, output is f(x) = bᵤ(x)/bₘₐₓ(x).
+ 856:     .         	  // For small |x|, i.e., small y, we have f ≈ 1-2·Φ(-√(π/2)) + (exp(-π/4)/4-Φ(-√(π/2))/2)·y² + O(y³).
+ 857:     .         	  //   c₀ := 1-2·Φ(-√(π/2))             = 0.7899085945560627246288
+ 858:     .         	  //   c₂ := (exp(-π/4)/4-Φ(-√(π/2))/2) = 0.06146168058051474034868
+ 859:     .         	  // Remez-optimized minimax rational function of order (7,7) for g(y) := ((f - c₀)/y²-c₂)/y .
+ 860:     .         	  // Accuracy better than 2.1E-17 in perfect arithmetic on x in [-3,0], i.e., y in [0,√6].
+ 861:     .         	  const double g = (-6.0630998803348508652E-2 + s_c * (-1.3448643785893710638E-1 + s_c * (-1.4163681164247209788E-1 + s_c * (-8.9763830861375452184E-2 + s_c * (-3.5121337410416895427E-2 + s_c * (-8.1438128785484908289E-3 + s_c * (-8.7339910261568864981E-4 - 3.3867568170011767283E-9 * s_c))))))) / (1 + s_c * (2.7220033406555055453 + s_c * (3.6503350360158844006 + s_c * (3.0186389537663895754 + s_c * (1.6527347941968487339 + s_c * (5.9591616493512210562E-1 + s_c * (1.3248016238920728894E-1 + 1.4212067435291777677E-2 * s_c)))))));
+ 862:     .         	  // f = c₀ + y²·(c₂+y·g)
+ 863:     .         	  return 0.7899085945560627246288 + (s_c * s_c) * (0.06146168058051474034868 + s_c * g);
+ 864:     .         	}
+ 865:     .         	
+ 866:     .         	#else
+ 867:     .         	
+ 868:     .         	inline double bₗ_over_bₘₐₓ(const double s_c /* = √|2x| */) {
+ 869:     .         	  // Four branches.
+ 870:     .         	  //                    │     I.          │         II.           │        III.         │        IV.     │
+ 871:     .         	  //                    │    ←-→          │         ←-→           │        ←-→          │        ←-→     │
+ 872:     .         	  //  In |x|:           [  0  ,  0.252               ,  3.45                ,  27                 ,  ∞   )
+ 873:     .         	  //  In s_c = √|2x| :  [  0  ,  0.7099295739719539  ,  2.6267851073127395  ,  7.348469228349534  ,  ∞   )
+ 874:     .         	#if !defined(BL_BRANCHES_UNORDERED)
+ 875:     2 [ 0.01%]	  if (s_c < 2.6267851073127395) {
+ 876:    28 [ 0.06%]	    if (s_c < 0.7099295739719539) {
+ 877:     .         	      // x = -y²/2, y = √|2x| = s_c, output is f(x) = bₗ(x)/bₘₐₓ(x).
+ 878:     .         	      // For small |x|, i.e., small y, we have f ≈ (exp(-1/π)/4-Φ(-√(π/2))/2)·y² + exp(-1/π)/(3·√(2π))·y³ + O(y⁴).
+ 879:     .         	      //   c₂ := (exp(-1/π)/4-Φ(-√(π/2))/2) =  0.07560996640296361767172
+ 880:     .         	      //   c₃ := exp(-1/π)/(3·√(2π))        = -0.09672719281339436290858
+ 881:     .         	      // Nonlinear-Remez optimized minimax rational function of order (5,4) for g(y) := ((f/y²-c₂)/y-c₃)/y .   f = y²·(c₂+y·(c₃+y·g)) .
+ 882:    17 [ 0.04%]	      const double g = (8.0741072372882856924E-2 + s_c * (9.8078911786358897272E-2 + s_c * (3.9760631445677058375E-2 + s_c * (5.9716928459589189876E-3 + s_c * (-6.4036399341479799981E-6 + 4.5425102093616062245E-7 * s_c))))) / (1 + s_c * (1.8594977672287664353 + s_c * (1.3658801475711790419 + s_c * (4.6132707108655653215E-1 + 6.1254597049831720643E-2 * s_c))));
+ 883:     .         	      // Branch I. Accuracy better than 7.43E-17 in perfect arithmetic.
+ 884:    23 [ 0.05%]	      return (s_c * s_c) * (0.07560996640296361767172 + s_c * (s_c * g - 0.09672719281339436290858));
+ 885:     .         	    }
+ 886:     .         	    // x = -y²/2, y = √|2x| = s_c, output is f(x) = bₗ(x)/bₘₐₓ(x). Remez optimized minimax rational function of order (6,6) for g(y) := bᵤ(-y²/2)/bₘₐₓ(-y²/2).
+ 887:     .         	    // Branch II. Accuracy better than 8.77E-17 in perfect arithmetic.
+ 888:     9 [ 0.02%]	    return (1.9795737927598581235E-9 + s_c * (-2.7081288564685588037E-8 + s_c * (7.5610142272549044609E-2 + s_c * (6.917130174466834016E-2 + s_c * (2.9537058950963019803E-2 + s_c * (6.5849252702302307774E-3 + 6.9711400639834715731E-4 * s_c)))))) / (1 + s_c * (2.1941448525586579756 + s_c * (2.1297103549995181357 + s_c * (1.1571483187179784072 + s_c * (3.7831622253060456794E-1 + s_c * (7.1714862448829349869E-2 + 6.6361975827861200167E-3 * s_c))))));
+ 889:     .         	  }
+ 890:    15 [ 0.03%]	  if (s_c < 7.348469228349534)
+ 891:     .         	    // x = -y²/2, y = √|2x| = s_c, output is f(x) = bₗ(x)/bₘₐₓ(x). Remez optimized minimax rational function of order (6,6) for g(y) := bₗ(-y²/2)/bₘₐₓ(-y²/2).
+ 892:     .         	    // Branch III. Accuracy better than 7.49E-17 in perfect arithmetic.
+ 893:    16 [ 0.04%]	    return (-9.3325115354837883291E-5 + s_c * (5.3118033972794648837E-4 + s_c * (7.4114855448345002595E-2 + s_c * (7.4039658186822817454E-2 + s_c * (3.9225177407687604785E-2 + s_c * (1.0022913378254090083E-2 + 1.7012579407246055469E-3 * s_c)))))) / (1 + s_c * (2.2217238132228132256 + s_c * (2.3441816707087403282 + s_c * (1.3912323646271141826 + s_c * (5.3231258443501838354E-1 + s_c * (1.1744005919716101572E-1 + 1.6195405895930935811E-2 * s_c))))));
+ 894:     .         	#if defined( USE_RECIPROCAL_EVALUATION_IN_FAR_TAIL_OF_BL_OVER_BMAX )
+ 895:     .         	  // x = -1/(2·y²), y = 1/√|2x|, output is f(x) = bₗ(x)/bₘₐₓ(x). Nonlinear-Remez optimized minimax rational function of order (6,4) for g(y) := ((f - Φ(-√(π/2)) )·4·exp(π/4)/y+√(π/2))/y .   f = Φ(-√(π/2)) + exp(-π//4)/4 · y · ( -√(π/2) + y · g ) .
+ 896:     .         	  const double y = 1 / s_c, g = (4.6053948291412933458E-2 + y * (1.8614246236051740003 + y * (2.687739780481516225 + y * (2.1166111659498009072E1 + y * (7.7041195462942084146 + y * (1.364789754674820047E1 - 1.1914640506516351326E1 * y)))))) / (1 + y * (1.2314848469729795224 + y * (1.4972388415765707953E1 + y * (8.5172763098903471958 + 4.051186378326048589E1 * y))));
+ 897:     .         	  // Branch IV. Accuracy better than 9.34E-17 in perfect arithmetic.
+ 898:     .         	  // Φ(-√(π/2)) = 0.1050457027219686376856
+ 899:     .         	  return 0.1050457027219686376856 + 0.1139845319414990591915 * y * (-1.253314137315500251208 + y * g);
+ 900:     .         	#else
+ 901:     .         	  // x = -1/(2·y²), y = 1/√|2x|, output is f(x) = bₗ(x)/bₘₐₓ(x). Remez-optimized minimax rational function of order (5,6) for g(y) := (f - Φ(-√(π/2))/y .   f = Φ(-√(π/2)) + y · g(y) .  Φ(-√(π/2)) = 0.1050457027219686376856.
+ 902:     .         	  // The final solution is transformed back to a (6,6) rational function of s_c via full analytical simplification of Φ(-√(π/2)) + g(1/s_c) / s_c.
+ 903:     .         	  // Branch IV. Accuracy better than 8.4E-17 in perfect arithmetic.
+ 904:    25 [ 0.05%]	  return (1.4500072297240603183E-3 + s_c * (-1.5116692485011195757E-3 + s_c * (7.1682178310936334831E-2 + s_c * (3.921610857820463493E-2 + s_c * (2.9342405658628443931E-2 + s_c * (5.1832526171631521426E-3 + 1.6930208078421474854E-3 * s_c)))))) / (1 + s_c * (1.6176313502305414664 + s_c * (1.6823159175281531664 + s_c * (8.4878307567372222113E-1 + s_c * (3.7543742137375791321E-1 + s_c * (7.126137099644302999E-2 + 1.6116992546788676159E-2 * s_c))))));
+ 905:     .         	#endif
+ 906:     .         	#else
+ 907:     .         	  if (s_c >= 2.6267851073127395) {
+ 908:     .         	    if (s_c >= 7.348469228349534) {
+ 909:     .         	#if defined( USE_RECIPROCAL_EVALUATION_IN_FAR_TAIL_OF_BL_OVER_BMAX )
+ 910:     .         	      // x = -1/(2·y²), y = 1/√|2x|, output is f(x) = bₗ(x)/bₘₐₓ(x). Nonlinear-Remez optimized minimax rational function of order (6,4) for g(y) := ((f - Φ(-√(π/2)) )·4·exp(π/4)/y+√(π/2))/y .   f = Φ(-√(π/2)) + exp(-π//4)/4 · y · ( -√(π/2) + y · g ) .
+ 911:     .         	      const double y = 1 / s_c, g = (4.6053948291412933458E-2 + y * (1.8614246236051740003 + y * (2.687739780481516225 + y * (2.1166111659498009072E1 + y * (7.7041195462942084146 + y * (1.364789754674820047E1 - 1.1914640506516351326E1 * y)))))) / (1 + y * (1.2314848469729795224 + y * (1.4972388415765707953E1 + y * (8.5172763098903471958 + 4.051186378326048589E1 * y))));
+ 912:     .         	      // Branch IV. Accuracy better than 9.34E-17 in perfect arithmetic.
+ 913:     .         	      // Φ(-√(π/2)) = 0.1050457027219686376856
+ 914:     .         	      return 0.1050457027219686376856 + 0.1139845319414990591915 * y * (-1.253314137315500251208 + y * g);
+ 915:     .         	#else
+ 916:     .         	      // x = -1/(2·y²), y = 1/√|2x|, output is f(x) = bₗ(x)/bₘₐₓ(x). Remez-optimized minimax rational function of order (5,6) for g(y) := (f - Φ(-√(π/2))/y .   f = Φ(-√(π/2)) + y · g(y) .  Φ(-√(π/2)) = 0.1050457027219686376856.
+ 917:     .         	      // The final solution is transformed back to a (6,6) rational function of s_c via full analytical simplification of Φ(-√(π/2)) + g(1/s_c) / s_c.
+ 918:     .         	      // Branch IV. Accuracy better than 8.4E-17 in perfect arithmetic.
+ 919:     .         	      return (1.4500072297240603183E-3 + s_c * (-1.5116692485011195757E-3 + s_c * (7.1682178310936334831E-2 + s_c * (3.921610857820463493E-2 + s_c * (2.9342405658628443931E-2 + s_c * (5.1832526171631521426E-3 + 1.6930208078421474854E-3 * s_c)))))) / (1 + s_c * (1.6176313502305414664 + s_c * (1.6823159175281531664 + s_c * (8.4878307567372222113E-1 + s_c * (3.7543742137375791321E-1 + s_c * (7.126137099644302999E-2 + 1.6116992546788676159E-2 * s_c))))));
+ 920:     .         	#endif
+ 921:     .         	    }
+ 922:     .         	    // x = -y²/2, y = √|2x| = s_c, output is f(x) = bₗ(x)/bₘₐₓ(x). Remez optimized minimax rational function of order (6,6) for g(y) := bₗ(-y²/2)/bₘₐₓ(-y²/2).
+ 923:     .         	    // Branch III. Accuracy better than 7.49E-17 in perfect arithmetic.
+ 924:     .         	    return (-9.3325115354837883291E-5 + s_c * (5.3118033972794648837E-4 + s_c * (7.4114855448345002595E-2 + s_c * (7.4039658186822817454E-2 + s_c * (3.9225177407687604785E-2 + s_c * (1.0022913378254090083E-2 + 1.7012579407246055469E-3 * s_c)))))) / (1 + s_c * (2.2217238132228132256 + s_c * (2.3441816707087403282 + s_c * (1.3912323646271141826 + s_c * (5.3231258443501838354E-1 + s_c * (1.1744005919716101572E-1 + 1.6195405895930935811E-2 * s_c))))));
+ 925:     .         	  }
+ 926:     .         	  if (s_c >= 0.7099295739719539)
+ 927:     .         	    // x = -y²/2, y = √|2x| = s_c, output is f(x) = bₗ(x)/bₘₐₓ(x). Remez optimized minimax rational function of order (6,6) for g(y) := bᵤ(-y²/2)/bₘₐₓ(-y²/2).
+ 928:     .         	    // Branch II. Accuracy better than 8.77E-17 in perfect arithmetic.
+ 929:     .         	    return (1.9795737927598581235E-9 + s_c * (-2.7081288564685588037E-8 + s_c * (7.5610142272549044609E-2 + s_c * (6.917130174466834016E-2 + s_c * (2.9537058950963019803E-2 + s_c * (6.5849252702302307774E-3 + 6.9711400639834715731E-4 * s_c)))))) / (1 + s_c * (2.1941448525586579756 + s_c * (2.1297103549995181357 + s_c * (1.1571483187179784072 + s_c * (3.7831622253060456794E-1 + s_c * (7.1714862448829349869E-2 + 6.6361975827861200167E-3 * s_c))))));
+ 930:     .         	  // x = -y²/2, y = √|2x| = s_c, output is f(x) = bₗ(x)/bₘₐₓ(x).
+ 931:     .         	  // For small |x|, i.e., small y, we have f ≈ (exp(-1/π)/4-Φ(-√(π/2))/2)·y² + exp(-1/π)/(3·√(2π))·y³ + O(y⁴).
+ 932:     .         	  //   c₂ := (exp(-1/π)/4-Φ(-√(π/2))/2) =  0.07560996640296361767172
+ 933:     .         	  //   c₃ := exp(-1/π)/(3·√(2π))        = -0.09672719281339436290858
+ 934:     .         	  // Nonlinear-Remez optimized minimax rational function of order (5,4) for g(y) := ((f/y²-c₂)/y-c₃)/y .   f = y²·(c₂+y·(c₃+y·g)) .
+ 935:     .         	  const double g = (8.0741072372882856924E-2 + s_c * (9.8078911786358897272E-2 + s_c * (3.9760631445677058375E-2 + s_c * (5.9716928459589189876E-3 + s_c * (-6.4036399341479799981E-6 + 4.5425102093616062245E-7 * s_c))))) / (1 + s_c * (1.8594977672287664353 + s_c * (1.3658801475711790419 + s_c * (4.6132707108655653215E-1 + 6.1254597049831720643E-2 * s_c))));
+ 936:     .         	  // Branch I. Accuracy better than 7.43E-17 in perfect arithmetic.
+ 937:     .         	  return (s_c * s_c) * (0.07560996640296361767172 + s_c * (s_c * g - 0.09672719281339436290858));
+ 938:     .         	#endif
+ 939:     .         	}
+ 940:     .         	
+ 941:     .         	inline double bᵤ_over_bₘₐₓ(const double s_c /* = √|2x| */) {
+ 942:     .         	  // Four branches.
+ 943:     .         	  //                    │     I.          │        II.           │      III.        │        IV.     │
+ 944:     .         	  //                    │    ←-→          │        ←-→           │      ←-→         │        ←-→     │
+ 945:     .         	  //  In |x|:           [  0  ,  0.3                ,  1.6               ,  19                ,  ∞   )
+ 946:     .         	  //  In s_c = √|2x| :  [  0  ,  0.7745966692414833 , 1.7888543819998317 , 6.164414002968976  ,  ∞   )
+ 947:     .         	#if !defined(BU_BRANCHES_UNORDERED)
+ 948:     8 [ 0.02%]	  if (s_c < 1.7888543819998317) {
+ 949:     .         	    if (s_c < 0.7745966692414833) {
+ 950:     .         	      // x = -y²/2, y = √|2x| = s_c, output is f(x) = bᵤ(x)/bₘₐₓ(x).
+ 951:     .         	      // For small |x|, i.e., small y, we have f ≈ 1-2·Φ(-√(π/2)) + (exp(-π/4)/4-Φ(-√(π/2))/2)·y² + O(y³).
+ 952:     .         	      //   c₀ := 1-2·Φ(-√(π/2))             = 0.7899085945560627246288
+ 953:     .         	      //   c₂ := (exp(-π/4)/4-Φ(-√(π/2))/2) = 0.0614616805805147403487
+ 954:     .         	      // Nonlinear-Remez optimized minimax rational function of order (5,4) for g(y) := ((f - c₀)/y²-c₂)/y .   f = c₀ + y²·(c₂+y·g) .
+ 955:    27 [ 0.06%]	      const double g = (-6.063099881233561706E-2 + s_c * (-8.1011946637120604985E-2 + s_c * (-4.2505564862438753828E-2 + s_c * (-8.9880000946868691788E-3 + s_c * (-7.5603072110443268356E-6 + 4.3879556621540147458E-7 * s_c))))) / (1 + s_c * (1.8400371530721828756 + s_c * (1.5709283443886143691 + s_c * (6.8913245453611400484E-1 + 1.4703173061720980923E-1 * s_c))));
+ 956:     .         	      // Branch I. Accuracy better than 9.2E-17 in perfect arithmetic.
+ 957:     4 [ 0.01%]	      return 0.7899085945560627246288 + (s_c * s_c) * (0.0614616805805147403487 + s_c * g);
+ 958:     .         	    }
+ 959:     .         	    // x = -y²/2, y = √|2x| = s_c, output is f(x) = bᵤ(x)/bₘₐₓ(x). Remez optimized minimax rational function of order (6,5) for g(y) := bᵤ(-y²/2)/bₘₐₓ(-y²/2).
+ 960:     .         	    // Branch II. Accuracy better than 8.4E-17 in perfect arithmetic.
+ 961:    13 [ 0.03%]	    return (7.8990944435755287611E-1 + s_c * (-1.2655410534988972886 + s_c * (-2.8803040699221003256 + s_c * (-2.6936198689113258727 + s_c * (-1.1213067281643205754 + s_c * (-2.1277793801691629892E-1 + 5.1486445905299802703E-6 * s_c)))))) / (1 + s_c * (-1.6021222722060444448 + s_c * (-3.7242680976480704555 + s_c * (-3.2083117718907365085 + s_c * (-1.2922333835930958583 - 2.3762328334050001161E-1 * s_c)))));
+ 962:     .         	  }
+ 963:     .         	  if (s_c < 6.164414002968976) {
+ 964:     .         	    // x = -y²/2, y = √|2x| = s_c, output is f(x) = bᵤ(x)/bₘₐₓ(x). Remez optimized minimax rational function of order (6,6) for g(y) := bᵤ(-y²/2)/bₘₐₓ(-y²/2).
+ 965:     .         	    // Branch III. Accuracy better than 7.7E-17 in perfect arithmetic.
+ 966:    15 [ 0.03%]	    return (7.8990640048967596475E-1 + s_c * (1.5993699253596663678 + s_c * (1.6481729039140370242 + s_c * (9.8227188109869200166E-1 + s_c * (3.6313557966186936883E-1 + s_c * (7.8277036261179606301E-2 + 9.3404307364538726214E-3 * s_c)))))) / (1 + s_c * (2.0247407005640401446 + s_c * (2.0087454279103740489 + s_c * (1.1627561803056961973 + s_c * (4.2004672123723823581E-1 + s_c * (8.9130862793887234546E-2 + 1.0436767768858021717E-2 * s_c))))));
+ 967:     .         	  }
+ 968:     .         	#if defined( USE_RECIPROCAL_EVALUATION_IN_FAR_TAIL_OF_BU_OVER_BMAX )
+ 969:     .         	  // x = -1/(2·y²), y = 1/√|2x| = 1/s_c, output is f(x) = bᵤ(x)/bₘₐₓ(x). Nonlinear-Remez optimized minimax rational function of order (6,4) for g(y) := ((f - Φ(√(π/2)) )·4·exp(π/4)/y+√(π/2))/y + (1-π/4)² .   f = Φ(√(π/2)) + exp(-π//4)/4 · y · ( -√(π/2) + y · (g-(1-π/4)²) ) .
+ 970:     .         	  const double y = 1 / s_c, g = (1.124338374937498095E-10 + y * (1.8047098623684767751 + y * (2.5589524137987524953 + y * (1.9974228630749728307E1 + y * (8.7923365534769864932 + y * (1.0442103559363093567E1 - 9.0656649638740373552E0 * y)))))) / (1 + y * (1.2936587104647790675 + y * (1.4215562205207917075E1 + y * (8.0353139924329651631 + 3.5848286453520043747E1 * y))));
+ 971:     .         	  // Branch IV. Accuracy better than 8.9E-17 in perfect arithmetic.
+ 972:     .         	  return 0.8949542972780313623144 + 0.1139845319414990591915 * y * (-1.253314137315500251208 + y * (g - 0.04605394827318829444583));
+ 973:     .         	#else
+ 974:     .         	  // x = -1/(2·y²), y = 1/√|2x| = 1/s_c, output is f(x) = bᵤ(x)/bₘₐₓ(x). Remez-optimized minimax rational function of order (5,6) for g(y) := (f - Φ(√(π/2))/y .   f = Φ(√(π/2)) + y · g(y) .  Φ(√(π/2)) = 0.8949542972780313623144 .
+ 975:     .         	  // The final solution is transformed back to a (6,6) rational function of s_c via full analytical simplification of Φ(√(π/2)) + g(1/s_c) / s_c.
+ 976:     .         	  // Branch IV. Accuracy better than 3.9E-17 in perfect arithmetic.
+ 977:    19 [ 0.04%]	  return (7.91133825948419359E-1 + s_c * (1.24653733210880042 + s_c * (1.32747426980537386 + s_c * (6.95009705717846778E-1 + s_c * (3.05965944268228457E-1 + s_c * (6.02200363391352887E-2 + 1.29050244454344842E-2 * s_c)))))) / (1 + s_c * (1.58117486714634672 + s_c * (1.60144713247629644 + s_c * (8.30040185836882436E-1 + s_c * (3.53071863813401531E-1 + s_c * (6.95901684131758475E-2 + 1.44197580643890011E-2 * s_c))))));
+ 978:     .         	#endif
+ 979:     .         	#else
+ 980:     .         	  if (s_c > 1.7888543819998317) {
+ 981:     .         	    if (s_c > 6.164414002968976) {
+ 982:     .         	#if defined( USE_RECIPROCAL_EVALUATION_IN_FAR_TAIL_OF_BU_OVER_BMAX )
+ 983:     .         	      // x = -1/(2·y²), y = 1/√|2x| = 1/s_c, output is f(x) = bᵤ(x)/bₘₐₓ(x). Nonlinear-Remez optimized minimax rational function of order (6,4) for g(y) := ((f - Φ(√(π/2)) )·4·exp(π/4)/y+√(π/2))/y + (1-π/4)² .   f = Φ(√(π/2)) + exp(-π//4)/4 · y · ( -√(π/2) + y · (g-(1-π/4)²) ) .
+ 984:     .         	      const double y = 1 / s_c, g = (1.124338374937498095E-10 + y * (1.8047098623684767751 + y * (2.5589524137987524953 + y * (1.9974228630749728307E1 + y * (8.7923365534769864932 + y * (1.0442103559363093567E1 - 9.0656649638740373552E0 * y)))))) / (1 + y * (1.2936587104647790675 + y * (1.4215562205207917075E1 + y * (8.0353139924329651631 + 3.5848286453520043747E1 * y))));
+ 985:     .         	      // Branch IV. Accuracy better than 8.9E-17 in perfect arithmetic.
+ 986:     .         	      return 0.8949542972780313623144 + 0.1139845319414990591915 * y * (-1.253314137315500251208 + y * (g - 0.04605394827318829444583));
+ 987:     .         	#else
+ 988:     .         	      // x = -1/(2·y²), y = 1/√|2x| = 1/s_c, output is f(x) = bᵤ(x)/bₘₐₓ(x). Remez-optimized minimax rational function of order (5,6) for g(y) := (f - Φ(√(π/2))/y .   f = Φ(√(π/2)) + y · g(y) .  Φ(√(π/2)) = 0.8949542972780313623144 .
+ 989:     .         	      // The final solution is transformed back to a (6,6) rational function of s_c via full analytical simplification of Φ(√(π/2)) + g(1/s_c) / s_c.
+ 990:     .         	      // Branch IV. Accuracy better than 3.9E-17 in perfect arithmetic.
+ 991:     .         	      return (7.91133825948419359E-1 + s_c * (1.24653733210880042 + s_c * (1.32747426980537386 + s_c * (6.95009705717846778E-1 + s_c * (3.05965944268228457E-1 + s_c * (6.02200363391352887E-2 + 1.29050244454344842E-2 * s_c)))))) / (1 + s_c * (1.58117486714634672 + s_c * (1.60144713247629644 + s_c * (8.30040185836882436E-1 + s_c * (3.53071863813401531E-1 + s_c * (6.95901684131758475E-2 + 1.44197580643890011E-2 * s_c))))));
+ 992:     .         	#endif
+ 993:     .         	    }
+ 994:     .         	    // x = -y²/2, y = √|2x| = s_c, output is f(x) = bᵤ(x)/bₘₐₓ(x). Remez optimized minimax rational function of order (6,6) for g(y) := bᵤ(-y²/2)/bₘₐₓ(-y²/2).
+ 995:     .         	    // Branch III. Accuracy better than 7.7E-17 in perfect arithmetic.
+ 996:     .         	    return (7.8990640048967596475E-1 + s_c * (1.5993699253596663678 + s_c * (1.6481729039140370242 + s_c * (9.8227188109869200166E-1 + s_c * (3.6313557966186936883E-1 + s_c * (7.8277036261179606301E-2 + 9.3404307364538726214E-3 * s_c)))))) / (1 + s_c * (2.0247407005640401446 + s_c * (2.0087454279103740489 + s_c * (1.1627561803056961973 + s_c * (4.2004672123723823581E-1 + s_c * (8.9130862793887234546E-2 + 1.0436767768858021717E-2 * s_c))))));
+ 997:     .         	  }
+ 998:     .         	  if (s_c >= 0.7745966692414833) {
+ 999:     .         	    // x = -y²/2, y = √|2x| = s_c, output is f(x) = bᵤ(x)/bₘₐₓ(x). Remez optimized minimax rational function of order (6,5) for g(y) := bᵤ(-y²/2)/bₘₐₓ(-y²/2).
+1000:     .         	    // Branch II. Accuracy better than 8.4E-17 in perfect arithmetic.
+1001:     .         	    return (7.8990944435755287611E-1 + s_c * (-1.2655410534988972886 + s_c * (-2.8803040699221003256 + s_c * (-2.6936198689113258727 + s_c * (-1.1213067281643205754 + s_c * (-2.1277793801691629892E-1 + 5.1486445905299802703E-6 * s_c)))))) / (1 + s_c * (-1.6021222722060444448 + s_c * (-3.7242680976480704555 + s_c * (-3.2083117718907365085 + s_c * (-1.2922333835930958583 - 2.3762328334050001161E-1 * s_c)))));
+1002:     .         	  }
+1003:     .         	  // x = -y²/2, y = √|2x| = s_c, output is f(x) = bᵤ(x)/bₘₐₓ(x).
+1004:     .         	  // For small |x|, i.e., small y, we have f ≈ 1-2·Φ(-√(π/2)) + (exp(-π/4)/4-Φ(-√(π/2))/2)·y² + O(y³).
+1005:     .         	  //   c₀ := 1-2·Φ(-√(π/2))             = 0.7899085945560627246288
+1006:     .         	  //   c₂ := (exp(-π/4)/4-Φ(-√(π/2))/2) = 0.0614616805805147403487
+1007:     .         	  // Remez-optimized minimax rational function of order (5,4) for g(y) := ((f - c₀)/y²-c₂)/y .   f = c₀ + y²·(c₂+y·g) .
+1008:     .         	  const double g = (-6.063099881233561706E-2 + s_c * (-8.1011946637120604985E-2 + s_c * (-4.2505564862438753828E-2 + s_c * (-8.9880000946868691788E-3 + s_c * (-7.5603072110443268356E-6 + 4.3879556621540147458E-7 * s_c))))) / (1 + s_c * (1.8400371530721828756 + s_c * (1.5709283443886143691 + s_c * (6.8913245453611400484E-1 + 1.4703173061720980923E-1 * s_c))));
+1009:     .         	  // Branch I. Accuracy better than 9.2E-17 in perfect arithmetic.
+1010:     .         	  return 0.7899085945560627246288 + (s_c * s_c) * (0.0614616805805147403487 + s_c * g);
+1011:     .         	#endif
+1012:     .         	}
+1013:     .         	
+1014:     .         	#endif
+1015:     .         	
+1016:     .         	#endif
+1017:     .         	
+1018:     .         	#if defined( SPECIALISE_EXACT_ATM_CASE )
+1019:     .         	
+1020:     .         	#if defined( USE_SPECIALISED_RATIONAL_FUNCTION_APPROXIMATION_FOR_ATM_IMPLIED_VOLATILITY )
+1021:     .         	
+1022:     .         	#if !defined( USE_ALGORITHM_AS241 )
+1023:     .         	double inverse_norm_cdf_for_low_probabilities(double p);
+1024:     .         	#endif
+1025:     .         	
+1026:     .         	// Specialisation for x = 0 where bₐₜₘ(s) = 1-2·Φ(-s/2) = 2·Φ(s/2)-1 = erf(s/√8).
+1027:     .         	double implied_normalised_volatility_atm(double 𝛽) {
+1028:     .         	  const double 𝛽ₘₐₓ = 0.6826894921370859; // = 1-erfc(1/√2)
+1029:     .         	  if (𝛽 <= 𝛽ₘₐₓ) {
+1030:     .         	    // Note that this branch domain corresponds exactly to innermost branch of Φ⁻¹() in algorithm "PJ-2024-Inverse-Normal" denoted as 'inverse_norm_cdfm½_for_midrange_probabilities()'
+1031:     .         	    // as also used in erfinv() in normaldistribution.cpp. The only difference is that the computation of s via erfinv() effectively does
+1032:     .         	    //   s = √8 · ( inverse_norm_cdfm½_for_midrange_probabilities(𝛽/2) / √2 ) .
+1033:     .         	    // For very small values of 𝛽, say DBL_MIN ≤ 𝛽 < 3·DBL_MIN or so, the innermost division by two in the term 𝛽/2 can already go below DBL_MIN
+1034:     .         	    // and thus becomes effectively 0 when we are compiling with -Ofast. For such small values, we should, however, have
+1035:     .         	    //   s = √(2π) · 𝛽
+1036:     .         	    //     ≈ 2.507 · 𝛽
+1037:     .         	    // i.e., s > 𝛽 by more than a factor of two. Expanding inverse_norm_cdfm½_for_midrange_probabilities(y) for very small y does indeed give
+1038:     .         	    //   inverse_norm_cdfm½_for_midrange_probabilities(y) ≈ √(2π) · y
+1039:     .         	    // which means in perfect arithmetic we'd indeed obtain
+1040:     .         	    //  √8 · erfinv(𝛽/2) = √8 · ( (√(2π)·𝛽/2) / √2 )
+1041:     .         	    //                   = √(2π) · 𝛽
+1042:     .         	    // Only that we obtain 0 for such small values of 𝛽 due to the intermediate underflow.
+1043:     .         	    // 
+1044:     .         	    // In practice, however, this only means that (for x=0) the minimum normalised Black price for which we can compute a positive implied
+1045:     .         	    // volatility and get the same normalised price back (i.e., we can exactly complete the full loop), is 6.67522e-308 instead of 4.45015e-308.
+1046:     .         	    // As for speed, I was unable to get a measurable difference between this specialised rational function approximation and the route via erfinv().
+1047:     .         	    // Given that there is no speed penalty, 6.67522e-308 vs. 4.45015e-308 as the minimum viable input price is an acceptable limitation to justify
+1048:     .         	    // the code simplification to go via the (otherwise reusable) erfinv() implementation.
+1049:     .         	    const double r = 𝛽ₘₐₓ * 𝛽ₘₐₓ - 𝛽 * 𝛽;
+1050:     .         	    // Remez - optimized minimax rational function approximation of order(6, 6) in r.
+1051:     .         	    // Accuracy better than 3.5E-17 in perfect arithmetic on β ∈ [0,1-erfc(1/√2)] which corresponds to s ∈ [0,2].
+1052:     .         	    return 𝛽 * ((2.92958954698308816 + r * (1.4014698674754995E1 + r * (2.44918990556468762E1 + r * (1.90763928424894996E1 + r * (6.43250149461895996 + r * (7.52328633671821543E-1 + 1.38781536163865582E-2 * r)))))) / (1 + r * (5.22443271807813073 + r * (1.02258209975070629E1 + r * (9.28187483709036392 + r * (3.9095549184069553 + r * (6.61214199809055912E-1 + 2.89411828874884851E-2 * r)))))));
+1053:     .         	  }
+1054:     .         	#if defined( USE_ALGORITHM_AS241 )
+1055:     .         	  return -2 * inverse_norm_cdf(0.5 * (1 - 𝛽));
+1056:     .         	#else
+1057:     .         	  // We fallback to the tail branch(es) of Φ⁻¹() in algorithm "PJ-2024-Inverse-Normal" [see file normaldistribution.cpp].
+1058:     .         	  return -2 * inverse_norm_cdf_for_low_probabilities(0.5 * (1 - 𝛽));
+1059:     .         	#endif
+1060:     .         	}
+1061:     .         	#else
+1062:     .         	
+1063:     .         	// We can use the internal branches of Φ⁻¹(·) to implement erfinv() avoiding catastrophic subtractive cancellation for small arguments.
+1064:     .         	double erfinv(double);
+1065:     .         	
+1066:     .         	// Specialisation for x = 0 where bₐₜₘ(s) = 1-2·Φ(-s/2) = 2·Φ(s/2)-1 = erf(s/√8).
+1067:     .         	#define implied_normalised_volatility_atm(𝛽) ((2 * SQRT_TWO) * erfinv(𝛽))
+1068:     .         	
+1069:     .         	#endif
+1070:     .         	
+1071:     .         	#endif
+1072:     .         	
+1073:     .         	// See http://en.wikipedia.org/wiki/Householder%27s_method for a detailed explanation of the third order Householder iteration.
+1074:     .         	//
+1075:     .         	// Given the objective function g(s) whose root x such that 0 = g(s) we seek, iterate
+1076:     .         	//
+1077:     .         	//     s_n+1  =  s_n  -  (g/g') · [ 1 - (g''/g')·(g/g') ] / [ 1 - (g/g')·( (g''/g') - (g'''/g')·(g/g')/6 ) ]
+1078:     .         	//
+1079:     .         	// Denoting  ν:=-(g/g'), h₂:=(g''/g'), and hh3:=(g'''/g'), this reads
+1080:     .         	//
+1081:     .         	//     s_n+1  =  s_n  +  ν · ( 1 + ν·h₂/2 ) / ( 1 + ν·( h₂ + ν·h₃/6 ) ).
+1082:     .         	//
+1083:     .         	//
+1084:     .         	// NOTE that this function requires that the input is for an out-of-the-money option, i.e. θ·x ≤ 0.
+1085:     .         	//
+1086:   182 [ 0.35%]	extern "C" DLL_EXPORT double lets_be_rational(double 𝛽, double θx, int N) {
+1087:     .         	  assert(θx <= 0);
+1088:    11 [ 0.03%]	  if (𝛽 <= 0)
+1089:     .         	    return implied_volatility_output(0, 0 == 𝛽 ? 0 : VOLATILITY_VALUE_TO_SIGNAL_PRICE_IS_BELOW_INTRINSIC);
+1090:     .         	#if defined( POSITIVE_DENORMALISATION_CUTOFF )
+1091:     .         	  if (𝛽 < POSITIVE_DENORMALISATION_CUTOFF) // For positive but denormalised (a.k.a. 'subnormal') prices, we return 0 since it would be impossible to converge to full machine accuracy anyway.
+1092:     .         	    return implied_volatility_output(0, 0);
+1093:     .         	#endif
+1094:     1 [ 0.01%]	  const double bₘₐₓ = exp(0.5 * θx);
+1095:     .         	  if (𝛽 >= bₘₐₓ)
+1096:     2 [ 0.01%]	    return implied_volatility_output(0, VOLATILITY_VALUE_TO_SIGNAL_PRICE_IS_ABOVE_MAXIMUM);
+1097:     .         	  // Exactly at the forward is a not-so-uncommon real world use case.
+1098:     .         	#if defined( SPECIALISE_EXACT_ATM_CASE )
+1099:     .         	  //  bₐₜₘ(s) = 1-2·Φ(-s/2) = 2·Φ(s/2)-1 = erf(s/√8)
+1100:   115 [ 0.22%]	  if (0 == θx) return implied_normalised_volatility_atm(𝛽);
+1101:     .         	#endif
+1102:    78 [ 0.15%]	  int iterations = 0;
+1103:     .         	#if defined (ENABLE_CHANGING_THE_MAXIMUM_ITERATION_COUNT)
+1104:     .         	  int direction_reversal_count = 0;
+1105:     .         	  double ds_previous = 0;
+1106:     .         	#endif
+1107:     .         	  double f = -DBL_MAX, s = -DBL_MAX, ds = -DBL_MAX;
+1108:     .         	#if defined (ENABLE_CHANGING_THE_MAXIMUM_ITERATION_COUNT) || defined( SAFEGUARD_STEP_AGAINST_BRACKETS )
+1109:     .         	  double s_left = DBL_MIN, s_right = DBL_MAX;
+1110:     .         	#endif
+1111:     .         	  // We have
+1112:     .         	  //  s_c  =  √(2|x|)   and  θ·x ≤ 0.
+1113:     .         	  //  b_c  =  b(θ·x,s_c)
+1114:     .         	  //       =  exp(θx/2)·Φ(θx/√(2|x|)+√(2|x|)/2) - exp(-θx/2)·Φ(θx/√(2|x|)-√(2|x|)/2)
+1115:     .         	  //       =  exp(-|x|/2)·Φ(-|x|/√(2|x|)+√(2|x|)/2) - exp(|x|/2)·Φ(-|x|/√(2|x|)-√(2|x|)/2)
+1116:     .         	  //       =  exp(-|x|/2)·Φ(0) - exp(|x|/2)·Φ(-√(2|x|))
+1117:     .         	  //       =  exp(-|x|/2) · [ 1/2 - exp(|x|)·Φ(-√(2|x|)) ]
+1118:     .         	  // ⟹ using Φ(z) = erfc(-z/√2)/2
+1119:     .         	  //  b_c  =  exp(-|x|/2) / 2 · [ 1 - exp(|x|)·erfc(√|x|) ]
+1120:     .         	  // ⟹ using erfc(y) = erfcx(y)·exp(-y²)
+1121:     .         	  //  b_c  =  exp(-|x|/2) / 2 · [ 1 - erfcx(√|x|) ]
+1122:     .         	  // Also:
+1123:     .         	  //  vega(x,s) = ∂b(x,s)/∂s = b'(s) = exp(-½·((x/s)²+(s/2)²) / √(2π)
+1124:     .         	  // So
+1125:     .         	  //  vega(x,s_c) = exp(-½·((x/√(2|x|))²+(√(2|x|)/2)²) / √(2π)
+1126:     .         	  //              = exp(-½·(|x|/2+|x|/2) / √(2π)
+1127:     .         	  //              = exp(-|x|/2) / √(2π)
+1128:     .         	  // Note: bₘₐₓ = exp(-|x|/2).
+1129:    73 [ 0.14%]	  const double sqrt_ax = sqrt(-θx), s_c = SQRT_TWO * sqrt_ax, ome = one_minus_erfcx(sqrt_ax), b_c = 0.5 * bₘₐₓ * ome;
+1130:     .         	  // Four branches.
+1131:   135 [ 0.26%]	  if (𝛽 < b_c) {   // LOWER HALF: s < s_c
+1132:     .         	    assert(θx < 0); // Even without ATM (x=0) specialisation, we cannot get here when x=0 since then b_c = 0. This assertion is merely a reminder and a safeguard against development errors.
+1133:     .         	    //  s_c  =  √(2|θx|)
+1134:     .         	    //  b_c  =  b(θx,s_c)  =  exp(θx/2)·Φ(-√|x|/√2+√|x|/√2) - exp(-θx/2)·Φ(-√|x|/√2-√|x|/√2)  =  ½·exp(θx/2) - exp(-θx/2)·Φ(-√(2|x|))
+1135:     .         	    //  sₗ  :=   s_c - b(x,s_c)/b'(x,s_c)                         =   √(2|x|) - (exp(θx/2)·Φ(0) - exp(-θx/2)·Φ(-√(2|x|)))·exp((|x|/2+|x|/2)/2)·√(2π)
+1136:     .         	    //      =   √(2|x|) - [ ½ - exp(|x|)·Φ(-√(2|x|)) ] · √(2π)   =   √(2|x|) - √(π/2) · [ 1 - erfcx(√|x|) ]
+1137:     .         	    // For x ⟶ -∞, we get
+1138:     .         	    //   sₗ ⟶ √(2|x|) - √(π/2)
+1139:     .         	    // and for 
+1140:     .         	    //  bₗ  := b(θx,sₗ)
+1141:     .         	    // we get
+1142:     .         	    //   bₗ/bₘₐₓ ⟶ Φ(-√(π/2)) = 0.1050457027219686376856
+1143:     .         	    const double sₗ = s_c - SQRT_PI_OVER_TWO * ome; // = s_c - b_c / v_c;
+1144:     .         	    assert(sₗ > 0); // Even without ATM (x=0) specialisation, we are guaranteed to have a positive number here. This assertion is merely a reminder and a safeguard against development errors.
+1145:     .         	#if defined( USE_UNIVARIATE_RATIONAL_FUNCTION_APPROXIMATIONS_FOR_BL_AND_BU_OVER_BMAX )
+1146:     3 [ 0.01%]	    const double bₗ = bₗ_over_bₘₐₓ(s_c) * bₘₐₓ;
+1147:     .         	#else
+1148:     .         	    const double bₗ = normalised_black(θx, sₗ);
+1149:     .         	#endif
+1150:     1 [ 0.01%]	    if (𝛽 < bₗ) {   // LOWEST BRANCH:   s < sₗ
+1151:     .         	      {
+1152:     .         	        double f_lower_map_l, d_f_lower_map_l_d_beta, d2_f_lower_map_l_d_beta2;
+1153:     .         	        compute_f_lower_map_and_first_two_derivatives(θx, sₗ, f_lower_map_l, d_f_lower_map_l_d_beta, d2_f_lower_map_l_d_beta2);
+1154:    42 [ 0.09%]	        const double rₗₗ = convex_rational_cubic_control_parameter_to_fit_second_derivative_at_right_side(0., bₗ, 0., f_lower_map_l, 1., d_f_lower_map_l_d_beta, d2_f_lower_map_l_d_beta2, true);
+1155:    97 [ 0.19%]	        f = rational_cubic_interpolation(𝛽, 0., bₗ, 0., f_lower_map_l, 1., d_f_lower_map_l_d_beta, rₗₗ);
+1156:   100 [ 0.20%]	        if (!(f > 0)) { // This can happen due to roundoff truncation for extreme values such as |x|>500.
+1157:     .         	          // We switch to quadratic interpolation using f(0)≡0, f(bₗ), and f'(0)≡1 to specify the quadratic.
+1158:     .         	          const double t = 𝛽 / bₗ;
+1159:     .         	          f = (f_lower_map_l * t + bₗ * (1 - t)) * t;
+1160:     .         	        }
+1161:     .         	        s = inverse_f_lower_map(θx, f);
+1162:     .         	      }
+1163:     .         	      assert(s > 0); // Even without ATM (x=0) specialisation, we are guaranteed to have a positive number here. This assertion is merely a reminder and a safeguard against development errors.
+1164:     .         	#if defined (ENABLE_CHANGING_THE_MAXIMUM_ITERATION_COUNT) || defined( SAFEGUARD_STEP_AGAINST_BRACKETS )
+1165:     .         	      s_right = sₗ;
+1166:     .         	#endif
+1167:     .         	      //
+1168:     .         	      // In this branch, which comprises the lowest segment, the objective function is
+1169:     .         	      //     g(s) = 1/ln(b(θx,s)) - 1/ln(𝛽)
+1170:     .         	      //          ≡ 1/ln(b(s)) - 1/ln(𝛽)
+1171:     .         	      // This makes
+1172:     .         	      //              g'                =   -b'/(b·ln(b)²)
+1173:     .         	      // using λ:=1/ln(b)
+1174:     .         	      //              g'                =   -b'/b·λ²
+1175:     .         	      //              ν      = -g/g'    =   (ln(𝛽)-ln(b))·ln(b)/ln(𝛽)·b/b'
+1176:     .         	      //                                =   (ln(𝛽)-1/λ)/(ln(𝛽)·λ) · b/b'     =   (λ-1/ln(𝛽))·b/(b'·λ²)
+1177:     .         	      //              h₂     = g''/g'   =   b''/b'  -  b'/b·(1+2/ln(b))
+1178:     .         	      //                                =   b''/b'  -  b'/b·(1+2·λ)
+1179:     .         	      //              h₃     = g'''/g'  =   b'''/b' +  2(b'/b)²·(1+3/ln(b)·(1+1/ln(b)))  -  3(b''/b)·(1+2/ln(b))
+1180:     .         	      //                                =   b'''/b' +  (b'/b)²·(2+6·λ·(1+λ))  -  (b''/b)·3·(1+2·λ)
+1181:     .         	      //              h₄     = g''''/g' =   b''''/b' - (b'/b)³·(6+λ·(22+λ·(36+λ·24))) + (b'/b)·(b''/b)·(12+36·λ·(1+λ)) - (b''/b)·(b''/b')·(3+6·λ)  - (b'''/b)·(4+8·λ)
+1182:     .         	      //                                =   b''''/b' - (b'/b)·[ (b'/b)²·(6+λ·(22+λ·(36+λ·24))) - (b''/b)·(12+36·λ·(1+λ)) ] - (b''/b)·(b''/b')·3·(1+2·λ)  - (b'''/b)·4·(1+2·λ)
+1183:     .         	      //                                =   b_h₄ - (b'/b) · [ (b'/b)²·(6+λ·(22+λ·(36+λ·24))) - (b''/b)·(12+36·λ·(1+λ)) ] - (b''/b)·b_h₂·3·(1+2·λ)  - (b'''/b)·4·(1+2·λ)
+1184:     .         	      // The Householder(3) iteration is
+1185:     .         	      //     s_n+1  =  s_n  +  ν · ( 1 + ν·h₂/2 ) / ( 1 + ν·( h₂ + ν·h₃/6 ) ).
+1186:     .         	      //
+1187:   640 [ 1.23%]	      const double ln_𝛽 = log(𝛽);
+1188:   638 [ 1.22%]	      for (; iterations<N && fabs(ds)>DBL_EPSILON * s; ++iterations) {
+1189:     .         	#if defined (ENABLE_CHANGING_THE_MAXIMUM_ITERATION_COUNT)
+1190:     .         	        if (ds * ds_previous < 0)
+1191:     .         	          ++direction_reversal_count;
+1192:     .         	        if (N > 3 && iterations > 0 && (3 == direction_reversal_count || !(s > s_left && s < s_right))) {
+1193:     .         	          // If looping inefficently, or the forecast step takes us outside the bracket, or onto its edges, switch to binary nesting.
+1194:     .         	          // NOTE that this can only really happen for very extreme values of |x|, such as |x| = |ln(F/K)| > 500.
+1195:     .         	#ifdef LOG_BINARY_NESTING
+1196:     .         	          if (direction_reversal_count > 2)
+1197:     .         	            printf("Intercepting excessive direction reversal in lowest branch.\n");
+1198:     .         	          else
+1199:     .         	            printf("Intercepting bracket boundary contact/violation in lowest branch.\n");
+1200:     .         	#endif
+1201:     .         	          s = 0.5 * (s_left + s_right);
+1202:     .         	          if (s_right - s_left <= DBL_EPSILON * s) break;
+1203:     .         	          direction_reversal_count = 0;
+1204:     .         	          ds = 0;
+1205:     .         	        }
+1206:     .         	        ds_previous = ds;
+1207:     .         	#endif
+1208:     .         	        assert(s > 0);
+1209:     .         	        // Structured bindings trigger a warning about the need for -std=c++17 with some older versions of g++. I don't like the tuple syntax: I very much prefer structured binding syntax, but I dislike warnings even more.
+1210:     .         	#if __cplusplus >= 201703L
+1211:    81 [ 0.16%]	        const auto [bx, ln_vega] = scaled_normalised_black_and_ln_vega(θx, s);
+1212:     .         	#else
+1213:     .         	        const auto bx_and_ln_vega = scaled_normalised_black_and_ln_vega(θx, s);
+1214:     .         	        const double bx = std::get<0>(bx_and_ln_vega), ln_vega = std::get<1>(bx_and_ln_vega);
+1215:     .         	#endif
+1216:   542 [ 1.04%]	        const double ln_b = log(bx) + ln_vega, bpob = 1 / bx;
+1217:     .         	#if defined (ENABLE_CHANGING_THE_MAXIMUM_ITERATION_COUNT)
+1218:     .         	        const double b = exp(ln_b), bp = bpob * b;
+1219:     .         	        if (b > 𝛽 && s < s_right) s_right = s; else if (b<𝛽 && s>s_left) s_left = s; // Tighten the bracket if applicable.
+1220:     .         	        if (!(b > 0 && bp > 0)) { // Numerical underflow. Switch to binary nesting for this iteration.
+1221:     .         	#ifdef LOG_BINARY_NESTING
+1222:     .         	          printf("Binary nesting in lowest branch: b=%g, b'=%g.\n", b, bp);
+1223:     .         	#endif
+1224:     .         	          ds = 0.5 * (s_left + s_right) - s;
+1225:     .         	        } else
+1226:     .         	#endif
+1227:     .         	        {
+1228:  2343 [ 4.47%]	          const double h = θx / s, x²_over_s³ = h * h / s, b_h₂ = x²_over_s³ - s / 4, ν = (ln_𝛽 - ln_b) * ln_b / ln_𝛽 / bpob, λ = 1 / ln_b, otλ = 1 + 2 * λ, h₂ = b_h₂ - bpob * otλ, c = 3 * (x²_over_s³ / s) /* = (h/s)² */;
+1229:   678 [ 1.30%]	          const double b_h₃ = b_h₂ * b_h₂ - c - 0.25, sq_bpob = bpob * bpob, bppob = b_h₂ * bpob, μ = 6 * λ * (1 + λ), h₃ = b_h₃ + sq_bpob * (2 + μ) - bppob * 3 * otλ;
+1230:     .         	          //
+1231:     .         	          // Introduced on 2023-12-14: for very large moneyness ratios [of no commercial relevance: exp(-190) = 3.05E-83], with exactly two Householder(3) iterations, I noticed that there is systematically a
+1232:     .         	          // residual inaccuracy in this branch [0 < b < bₗ] higher than the theoretically attainable one given by (|b(s)/(s·b'(s))|+1)·ε where ε is DBL_EPSILON and b(s) is the normalised Black function.
+1233:     .         	          // This residual inaccuracy disappears when we use two Householder(4) [5th order accuracy] iterations instead. Tests show that the initial guess is always close enough for the method to be contractive.
+1234:     .         	          // See further down in the description of the BlackAccuracyFactor() for a derivation of the formula (|b(s)/(s·b'(s))|+1)·ε. In this branch, we find that (|b(s)/(s·b'(s))|+1) is numerically equal to 1,
+1235:     .         	          // and thus the theoretically attainable relative accuracy is DBL_EPSILON.
+1236:     .         	          // 
+1237:   250 [ 0.48%]	          if (θx < -190) {
+1238:     .         	            //  b_h₄   =    b''''/b'   =   b_h₂·(b_h₃-½) - (b_h₂-2/s)·6·x²/s⁴
+1239:     .         	            //   h₄    =    b_h₄ - (b'/b) · [ (b'/b)²·(6+λ·(22+λ·(36+λ·24))) - (b''/b)·(12+36·λ·(1+λ)) ] - (b''/b)·b_h₂·3·(1+2·λ)  - (b'''/b)·4·(1+2·λ)    with    λ=1/ln(b)
+1240:   162 [ 0.31%]	            ds = ν * householder_factor(ν, h₂, h₃, (b_h₂ * (b_h₃ - 0.5) - (b_h₂ - 2 / s) * 2 * c) - bpob * (sq_bpob * (6 + λ * (22 + λ * (36 + λ * 24))) - bppob * (12 + 6 * μ)) - bppob * b_h₂ * 3 * otλ - b_h₃ * bpob * 4 * otλ);
+1241:     .         	          } else
+1242:  1090 [ 2.08%]	            ds = ν * householder_factor(ν, h₂, h₃);
+1243:     .         	        }
+1244:     .         	#if defined( SAFEGUARD_STEP_AGAINST_BRACKETS )
+1245:     .         	        // Never leave the branch (or bracket)
+1246:     .         	        s = take_step(s_left, s_right, s, ds);
+1247:     .         	#else
+1248:   360 [ 0.69%]	        s += ds;
+1249:     .         	#endif
+1250:     .         	        assert(s > 0);
+1251:     .         	      }
+1252:     .         	      return implied_volatility_output(iterations, s);
+1253:     .         	    } else {  // Lower middle: sₗ ≤ s < s_c
+1254:     1 [ 0.01%]	      const double inv_v_c = SQRT_TWO_PI / bₘₐₓ;  // v_c = bₘₐₓ * (1 / SQRT_TWO_PI)
+1255:     .         	      const double inv_vₗ = inv_normalised_vega(θx, sₗ), rₗₘ = convex_rational_cubic_control_parameter_to_fit_second_derivative_at_right_side(bₗ, b_c, sₗ, s_c, inv_vₗ, inv_v_c, 0.0, false);
+1256:     1 [ 0.01%]	      s = rational_cubic_interpolation(𝛽, bₗ, b_c, sₗ, s_c, inv_vₗ, inv_v_c, rₗₘ);
+1257:     .         	      assert(s > 0); // Even without ATM (x=0) specialisation, we are guaranteed to have a positive number here. This assertion is merely a reminder and a safeguard against development errors.
+1258:     .         	#if defined (ENABLE_CHANGING_THE_MAXIMUM_ITERATION_COUNT) || defined( SAFEGUARD_STEP_AGAINST_BRACKETS )
+1259:     .         	      s_left = sₗ;
+1260:     .         	      s_right = s_c;
+1261:     .         	#endif
+1262:     .         	    }
+1263:     .         	  } else {         // UPPER HALF:  s_c ≤ s
+1264:     .         	    //  sᵤ  :=   s_c + (bₘₐₓ-b(x,s_c))/b'(x,s_c)
+1265:     .         	    //       =   √(2|x|) + (exp(θx/2) - exp(θx/2)·Φ(0) + exp(-θx/2)·Φ(-√(2|x|))) · exp((|θx|/2+|θx|/2)/2)·√(2π)
+1266:     .         	    //       =   √(2|x|) + (exp(θx/2)/2 + exp(-θx/2)·Φ(-√(2|x|))) · exp(-θx/2)·√(2π)
+1267:     .         	    //       =   √(2|x|) + [ ½ + exp(-θx)·Φ(-√(2|x|)) ] · √(2π)
+1268:     .         	    //       =   √(2|x|) + √(π/2) · [ 1 + erfcx(√|x|) ]
+1269:     .         	    //       =   sₗ + √(2π)
+1270:     .         	    // For x ⟶ -∞, we get
+1271:     .         	    //   sᵤ ⟶ √(2|x|) + √(π/2)
+1272:     .         	    // and for
+1273:     .         	    //  bᵤ  := b(θx,sᵤ)
+1274:     .         	    // we get
+1275:     .         	    //   bᵤ/bₘₐₓ ⟶ Φ(√(π/2)) = 0.8949542972780313623144
+1276:     .         	    //
+1277:     .         	#if defined( DO_NOT_SIMPLIFY_SU )
+1278:     .         	    const double inv_v_c = SQRT_TWO_PI / bₘₐₓ;  // v_c = bₘₐₓ * (1 / SQRT_TWO_PI)
+1279:     .         	    const double sᵤ = v_c > DBL_MIN ? s_c + (bₘₐₓ - b_c) * inv_v_c : s_c;
+1280:     .         	#else
+1281:    58 [ 0.12%]	    const double sᵤ = s_c + SQRT_PI_OVER_TWO * (2 - ome); // = s_c + (bₘₐₓ - b_c) / v_c    ---     ome  =  1 - erfcx(√|x|)
+1282:     .         	#endif
+1283:     .         	    assert(sᵤ > 0);
+1284:     .         	#if defined( USE_UNIVARIATE_RATIONAL_FUNCTION_APPROXIMATIONS_FOR_BL_AND_BU_OVER_BMAX )
+1285:    47 [ 0.09%]	    const double bᵤ = bᵤ_over_bₘₐₓ(s_c) * bₘₐₓ;
+1286:     .         	#else
+1287:     .         	    const double bᵤ = normalised_black(θx, sᵤ);
+1288:     .         	#endif
+1289:    82 [ 0.16%]	    if (𝛽 <= bᵤ) { // UPPER MIDDLE:  s_c ≤ s ≤ sᵤ
+1290:     .         	#if !defined( DO_NOT_SIMPLIFY_SU )
+1291:    26 [ 0.05%]	      const double inv_v_c = SQRT_TWO_PI / bₘₐₓ;  // v_c = bₘₐₓ * (1 / SQRT_TWO_PI)
+1292:     .         	#endif
+1293:    17 [ 0.04%]	      const double inv_vᵤ = inv_normalised_vega(θx, sᵤ), rᵤₘ = convex_rational_cubic_control_parameter_to_fit_second_derivative_at_left_side(b_c, bᵤ, s_c, sᵤ, inv_v_c, inv_vᵤ, 0.0, false);
+1294:    25 [ 0.05%]	      s = rational_cubic_interpolation(𝛽, b_c, bᵤ, s_c, sᵤ, inv_v_c, inv_vᵤ, rᵤₘ);
+1295:     .         	      assert(s > 0);
+1296:     .         	#if defined (ENABLE_CHANGING_THE_MAXIMUM_ITERATION_COUNT) || defined( SAFEGUARD_STEP_AGAINST_BRACKETS )
+1297:     .         	      s_left = s_c;
+1298:     .         	      s_right = sᵤ;
+1299:     .         	#endif
+1300:     .         	    } else {       // HIGHEST BRANCH:  sᵤ < s  and  𝛽 > bₘₐₓ/2
+1301:     .         	      // The target value 𝛽 ϵ [bᵤ,bₘₐₓ).
+1302:     .         	      double f_upper_map_h, d_f_upper_map_h_d_beta, d2_f_upper_map_h_d_beta2;
+1303:     .         	      compute_f_upper_map_and_first_two_derivatives(θx, sᵤ, f_upper_map_h, d_f_upper_map_h_d_beta, d2_f_upper_map_h_d_beta2);
+1304:     3 [ 0.01%]	      if (d2_f_upper_map_h_d_beta2 > -SQRT_DBL_MAX && d2_f_upper_map_h_d_beta2 < SQRT_DBL_MAX) {
+1305:    35 [ 0.07%]	        const double rᵤᵤ = convex_rational_cubic_control_parameter_to_fit_second_derivative_at_left_side(bᵤ, bₘₐₓ, f_upper_map_h, 0., d_f_upper_map_h_d_beta, -0.5, d2_f_upper_map_h_d_beta2, true);
+1306:    99 [ 0.19%]	        f = rational_cubic_interpolation(𝛽, bᵤ, bₘₐₓ, f_upper_map_h, 0., d_f_upper_map_h_d_beta, -0.5, rᵤᵤ);
+1307:     .         	      }
+1308:    82 [ 0.16%]	      if (f <= 0) {
+1309:     1 [ 0.01%]	        const double h = bₘₐₓ - bᵤ, t = (𝛽 - bᵤ) / h;
+1310:    38 [ 0.08%]	        f = (f_upper_map_h * (1 - t) + 0.5 * h * t) * (1 - t); // We switch to quadratic interpolation using f(bᵤ), f(bₘₐₓ)≡0, and f'(bₘₐₓ)≡-1/2 to specify the quadratic.
+1311:     .         	      }
+1312:     .         	      s = inverse_f_upper_map(f);
+1313:     .         	      assert(s > 0);
+1314:     .         	#if defined (ENABLE_CHANGING_THE_MAXIMUM_ITERATION_COUNT) || defined( SAFEGUARD_STEP_AGAINST_BRACKETS )
+1315:     .         	      s_left = sᵤ;
+1316:     .         	#endif
+1317:   174 [ 0.34%]	      if (𝛽 > 0.5 * bₘₐₓ) { // Else we better drop through and let the objective function be g(s) = b(θx,s)-𝛽. 
+1318:     .         	        //
+1319:     .         	        // In this branch, which comprises the upper segment, the objective function is
+1320:     .         	        //     g(s) = ln(bₘₐₓ-𝛽)-ln(bₘₐₓ-b(θx,s))
+1321:     .         	        //          ≡ ln((bₘₐₓ-𝛽)/(bₘₐₓ-b(s)))
+1322:     .         	        // This makes
+1323:     .         	        //              g'         =   b'/(bₘₐₓ-b)
+1324:     .         	        // 
+1325:     .         	        // from here on (see further down), using
+1326:     .         	        // 
+1327:     .         	        //           b̄(θx,s)      :=   bₘₐₓ   -  b(θx,s)
+1328:     .         	        // and
+1329:     .         	        //           β̄            :=   bₘₐₓ   -  𝛽
+1330:     .         	        //
+1331:     .         	        // we get for ν=-g/g', h₂=g''/g', h₃=g'''/g', h₄=g''''/g' :
+1332:     .         	        //
+1333:     .         	        //         ν   =  -g/g'     =   ln(b̄/β̄)·b̄/b'
+1334:     .         	        //         h₂  =  g''/g'    =   b''/b'   +  b'/b̄
+1335:     .         	        //                          =   b''/b'   +  g'
+1336:     .         	        //         h₃  =  g'''/g'   =   b'''/b'  +  g'·(2g'+3b''/b')
+1337:     .         	        //         h₄  =  g''''/g'  =   b''''/b' +  g'²·6·(g'+2b''/b') + 3·(b''/b')²·g' + 4·(b'''/b')·g'
+1338:     .         	        //             =  g''''/g'  =   b''''/b' +  g' · ( 6·g'·(g'+2b''/b') + 3·(b''/b')² + 4·(b'''/b') )
+1339:     .         	        // 
+1340:     .         	        // and the iteration is
+1341:     .         	        //     s_n+1  =  s_n  +  ν · ( 1 + ν·h₂/2 ) / ( 1 + ν·( h₂ + ν·h₃/6 ) ).
+1342:     .         	        //
+1343:     .         	        const double 𝛽_bar = bₘₐₓ - 𝛽;
+1344:  1003 [ 1.92%]	        for (; iterations<N && fabs(ds)>DBL_EPSILON * s; ++iterations) {
+1345:     .         	#if defined (ENABLE_CHANGING_THE_MAXIMUM_ITERATION_COUNT)
+1346:     .         	          if (ds * ds_previous < 0)
+1347:     .         	            ++direction_reversal_count;
+1348:     .         	          if (N > 3 && iterations > 0 && (3 == direction_reversal_count || !(s > s_left && s < s_right))) {
+1349:     .         	            // If looping inefficently, or the forecast step takes us outside the bracket, or onto its edges, switch to binary nesting.
+1350:     .         	            // NOTE that this can only really happen for very extreme values of |x|, such as |x| = |ln(F/K)| > 500.
+1351:     .         	#ifdef LOG_BINARY_NESTING
+1352:     .         	            if (direction_reversal_count > 2)
+1353:     .         	              printf("Intercepting excessive direction reversal in highest branch.\n");
+1354:     .         	            else
+1355:     .         	              printf("Intercepting bracket boundary contact/violation in highest branch.\n");
+1356:     .         	#endif
+1357:     .         	            s = 0.5 * (s_left + s_right);
+1358:     .         	            if (s_right - s_left <= DBL_EPSILON * s) break;
+1359:     .         	            direction_reversal_count = 0;
+1360:     .         	            ds = 0;
+1361:     .         	          }
+1362:     .         	          ds_previous = ds;
+1363:     .         	          // See below as to the reason behind and the derivation of the formula for b̄(θx,s).
+1364:     .         	          const double h = θx / s, t = s / 2, gp /* = bp / b_bar */ = (2 / SQRT_TWO_PI) / (erfcx_cody((t + h) * (1 / SQRT_TWO)) + erfcx_cody((t - h) * (1 / SQRT_TWO))), bp = normalised_vega(θx, s), b_bar = bp / gp;
+1365:     .         	          // b > 𝛽  <=>  b̄ < β̄ and vice versa.
+1366:     .         	          if (b_bar < 𝛽_bar && s < s_right) s_right = s; else if (b_bar > 𝛽_bar && s > s_left) s_left = s; // Tighten the bracket if applicable.
+1367:     .         	          if (!(b_bar > DBL_MIN && bp > DBL_MIN)) { // Numerical over-/underflow. Switch to binary nesting for this iteration.
+1368:     .         	            // NOTE (2023-12-12): since the switch to the direct computation of b̄(θx,s) without any subtractive cancellation, I have no longer seen this branch entered into.
+1369:     .         	#ifdef LOG_BINARY_NESTING
+1370:     .         	            printf("Binary nesting in highest branch.\n");
+1371:     .         	#endif
+1372:     .         	            ds = 0.5 * (s_left + s_right) - s;
+1373:     .         	          } else
+1374:     .         	#else
+1375:     .         	          // See below as to the reason behind and the derivation of the formula for b̄(θx,s).
+1376:  1823 [ 3.48%]	          const double h = θx / s, t = s / 2, gp /* = bp / b_bar */ = (2 / SQRT_TWO_PI) / (erfcx_cody((t + h) * (1 / SQRT_TWO)) + erfcx_cody((t - h) * (1 / SQRT_TWO))), b_bar = normalised_vega(θx, s) / gp;
+1377:     .         	#endif
+1378:     .         	          {
+1379:     .         	            //
+1380:     .         	            // Introduced on 2023-12-10
+1381:     .         	            //
+1382:     .         	            //    b̄(θx,s)           :=   bₘₐₓ   -  b(θx,s)
+1383:     .         	            //    b̄(θx,s)            =   exp(θx/2)  -  [ exp(θx/2)·Φ(θx/s+s/2) - exp(-θx/2)·Φ(θx/s-s/2) ]                     |     using  bₘₐₓ = exp(θx/2)
+1384:     .         	            //    b̄(θx,s)            =   exp(θx/2)·Φ(-θx/s-s/2)  +  exp(-θx/2)·Φ(θx/s-s/2)                       (1)     |     using  1-Φ(z) = Φ(-z)
+1385:     .         	            // 
+1386:     .         	            // Note: no subtractive cancellation!
+1387:     .         	            // 
+1388:     .         	            //    b̄(θx,s)            =   ½ · [ erfc((s/2+θx/s)/√2)·bₘₐₓ + erfc((s/2-θx/s)/√2)/bₘₐₓ ]   (2)     |     using  Φ(z) = erfc(-z/√2)/2
+1389:     .         	            // 
+1390:     .         	            // In this upper segment, b > bᵤ = b(su), sᵤ = sc + b̄(sc)/b'(sc)   with sc = √(2|x|) and dropping the dependency on x, we benefit from
+1391:     .         	            // the [re-]evaluation of (bₘₐₓ-b) via formula (1) or (2) above.
+1392:     .         	            // 
+1393:     .         	            // ················································································································································································································
+1394:     .         	            // To see this, consider that bᵤ(-|x|)/bₘₐₓ is monotonically increasing on |x| ∈ [0,∞). The bounds can be readily computed as follows, assuming w.l.o.g. that θx<0:
+1395:     .         	            //
+1396:     .         	            //      sᵤ(θx)   =   sc + b̄(θx,sc)/b'(sc)
+1397:     .         	            //               =   sc + [ exp(θx/2)·Φ(-θx/sc-sc/2)  +  exp(-θx/2)·Φ(θx/sc-sc/2) ] · exp(½·((θx/sc)²+(sc/2)²) · √(2π)               |   θx = - √(|x|·|x|), θx/sc = - √(|x|/2), sc/2 = +√(|x|/2), x/sc+sc/2 = 0, θx/sc-sc/2 = -sc
+1398:     .         	            //               =   √(2|x|) + [ ½·exp(θx/2)  +  exp(-θx/2)·Φ(-√(2|x|)) ] · exp(½·|x|) · √(2π)
+1399:     .         	            //               =   √(2|x|)  +  √(π/2)  +  e⁻ˣ·Φ(-√(2|x|)) · √(2π)
+1400:     .         	            //
+1401:     .         	            // Limiting cases:
+1402:     .         	            //
+1403:     .         	            //      sᵤ(0)    =   √(2π)
+1404:     .         	            //      bᵤ(0)    =   b(0,sᵤ(0))   =   Φ(sᵤ(0)/2)  -  Φ(-sᵤ(0)/2)
+1405:     .         	            //               =   Φ(√(π/2))  -  Φ(-√(π/2))
+1406:     .         	            //               =   0.7899085945560624
+1407:     .         	            // 
+1408:     .         	            //  θx ⟶ -∞:
+1409:     .         	            // 
+1410:     .         	            //      sᵤ(θx)   =   √(2|x|)  +  √(π/2)  +  e⁻ˣ·Φ(-√(2|x|)) · √(2π)
+1411:     .         	            //      sᵤ(θx)   ≈   √(2|x|)  +  √(π/2)  +  e⁻ˣ·φ(-√(2|x|)) · √(2π) / √(2|x|)                                    | Abramowitz & Stegun 26.2.12
+1412:     .         	            //               =   √(2|x|)  +  √(π/2)  +  e⁻ˣ·exp(-|x|) / √(2|x|)
+1413:     .         	            //               =   √(2|x|)  +  √(π/2)  +  1 / √(2|x|)
+1414:     .         	            //               =   √(2|x|) · ( 1  +  √(π/(4|x|)) +  1/(4|x|) )
+1415:     .         	            //    θx/sᵤ(θx)  =   -√(|x|/2) · ( 1  -  √(π/(4|x|)) +  O(1/|x|) )
+1416:     .         	            //      bᵤ(θx)   =   b(θx,sᵤ(θx))
+1417:     .         	            //               ≈   exp(θx/2)·Φ( -√(|x|/2)·(1-√(π/(4|x|))) + √(|x|/2)·(1+√(π/(4|x|))) )    exp(-θx/2)·Φ( -√(|x|/2)·(1-√(π/(4|x|))) - √(|x|/2)·(1+√(π/(4|x|))) )
+1418:     .         	            //               =   exp(θx/2)·Φ( √(π/2) )  -  exp(-θx/2)·Φ( -√(2|x|) )
+1419:     .         	            //               =   exp(θx/2)·Φ( √(π/2) )  -  1/√(4π|x|)                                                             | Abramowitz & Stegun 26.2.12
+1420:     .         	            // 
+1421:     .         	            // With bₘₐₓ(θx) = exp(θx/2), this means
+1422:     .         	            // 
+1423:     .         	            //    bᵤ(0)/bₘₐₓ(0)   =   Φ(√(π/2))  -  Φ(-√(π/2))   =   0.7899085945560624
+1424:     .         	            // 
+1425:     .         	            // and
+1426:     .         	            //      lim  bᵤ(x)/bₘₐₓ(x)      =      Φ(√(π/2))     =   0.8949542972780312
+1427:     .         	            //       x→-∞
+1428:     .         	            // 
+1429:     .         	            // In other words, on s ∈ [sᵤ,∞), where b  ∈ [bᵤ,bₘₐₓ)  [ 0 < bᵤ ≤ b < bₘₐₓ ], we always have b ≥ bᵤ > ¾·bₘₐₓ and thus b̄ = bₘₐₓ-b < bₘₐₓ/4.
+1430:     .         	            // And whenever any f̄ = fₘₐₓ-f is less than f/4 we incur less roundoff error in f̄ if we can compute f̄ directly without subtractive cancellation. □ (q.e.d.)
+1431:     .         	            // ················································································································································································································
+1432:     .         	            //
+1433:     .         	            // Continuing from equation (2), using erfc(z) = erfcx(z)·exp(-z²), we get
+1434:     .         	            // 
+1435:     .         	            //    b̄(θx,s)   =   ½ · ( erfcx((s/2+θx/s)/√2)·exp(-½((θx/s)²+θx+(s/2)²))·exp(θx/2) + erfcx((s/2-θx/s)/√2)·exp(-½((θx/s)²-θx+(s/2)²))·exp(-θx/2) )
+1436:     .         	            //
+1437:     .         	            //              =   ½ · ( erfcx((s/2+θx/s)/√2) + erfcx((s/2-θx/s)/√2) ) · exp(-½((θx/s)²+(s/2)²))
+1438:     .         	            //
+1439:     .         	            //              =   √(π/2) · [ erfcx((s/2+θx/s)/√2) + erfcx((s/2-θx/s)/√2) ] · ∂b(θx,s)/∂s
+1440:     .         	            //
+1441:     .         	            // Ergo, ∂b(θx,s)/∂s / b̄(θx,s)  =  √(2/π) / ( erfcx((s/2+θx/s)/√2) + erfcx((s/2-θx/s)/√2) )
+1442:     .         	            //
+1443:   332 [ 0.64%]	            const double g = log(𝛽_bar / b_bar), x²_over_s³ = (h * h) / s, b_h₂ = x²_over_s³ - s / 4, c = 3 * (x²_over_s³ / s) /* = (h/s)² */, b_h₃ = b_h₂ * b_h₂ - c - 0.25;
+1444:    86 [ 0.17%]	            const double ν = -g / gp, h₂ = b_h₂ + gp, h₃ = b_h₃ + gp * (2 * gp + 3 * b_h₂);
+1445:     .         	            //
+1446:     .         	            // Introduced on 2023-12-14: for very large moneyness ratios [of no commercial relevance: exp(-580) = 1.286E-252], with exactly two Householder(3) iterations, I noticed that there is systematically a
+1447:     .         	            // residual inaccuracy in this branch (bᵤ ≤ b < bₘₐₓ = exp(θx/2)) higher than the theoretically attainable one given by (|b(s)/(s·b'(s))|+1)·ε where ε is DBL_EPSILON and b(s) is the normalised Black function.
+1448:     .         	            // This residual inaccuracy disappears when we use two Householder(4) [5th order accuracy] iterations instead. Tests show that the initial guess is always close enough for the method to be contractive.
+1449:     .         	            // See further down in the description of the BlackAccuracyFactor() for a derivation of the formula (|b(s)/(s·b'(s))|+1)·ε.
+1450:     .         	            // 
+1451:  1026 [ 1.96%]	            if (θx < -580) {
+1452:     .         	              //  b_h₄   =    b''''/b'   =   b_h₂·(b_h₃-½) - (b_h₂-2/s)·6·x²/s⁴
+1453:     .         	              //   h₄    =    b''''/b' +  g' · ( 6·g'·(g'+2b''/b') + 3·(b''/b')² + 4·(b'''/b') )   =   b_h₄ +  g' · ( 6·g'·(g'+2·b_h₂) + 3·b_h₂² + 4·b_h₃ )
+1454:     .         	              ds = ν * householder_factor(ν, h₂, h₃, (b_h₂ * (b_h₃ - 0.5) - (b_h₂ - 2 / s) * 2 * c) + gp * (6 * gp * (gp + 2 * b_h₂) + 3 * b_h₂ * b_h₂ + 4 * b_h₃));
+1455:     .         	            } else
+1456:     .         	              ds = ν * householder_factor(ν, h₂, h₃);
+1457:     .         	          }
+1458:     .         	#if defined( SAFEGUARD_STEP_AGAINST_BRACKETS )
+1459:     .         	          // Never leave the branch (or bracket)
+1460:     .         	          s = take_step(s_left, s_right, s, ds);
+1461:     .         	#else
+1462:     .         	          s += ds;
+1463:     .         	#endif
+1464:     .         	          assert(s > 0);
+1465:     .         	        }
+1466:     .         	        return implied_volatility_output(iterations, s);
+1467:     .         	      }
+1468:     .         	    }
+1469:     .         	  }
+1470:     .         	  //
+1471:     .         	  // MIDDLE BRANCHES (ITERATION):  sₗ ≤ s  and ( s < sᵤ or  𝛽 ≤ bₘₐₓ/2 )
+1472:     .         	  // 
+1473:     .         	  // In this branch, which comprises the two middle segments, the objective function is g(s) = b(θx,s)-𝛽, or g(s) = b(s) - 𝛽, for short.
+1474:     .         	  // This makes
+1475:     .         	  //              ν    =   -g/g'     =  -(b-𝛽)/b'
+1476:     .         	  //              h₂   =   g''/g'    =    b''/b'      =   x²/s³-s/4
+1477:     .         	  //              h₃   =   g'''/g'   =    b'''/b'     =   h₂² - 3·x²/s⁴ - 1/4
+1478:     .         	  //              h₄   =   g''''/g'  =    b''''/b'    =   h₂·(h₃-½)-(h₂-2/s)·6·x²/s⁴     [ not actually used in this branch ]
+1479:     .         	  // 
+1480:     .         	  // and the iteration is
+1481:     .         	  //     s_n+1  =  s_n  +  ν · ( 1 + ν·h₂/2 ) / ( 1 + ν·( h₂ + ν·h₃/6 ) ).
+1482:     .         	  //
+1483:   131 [ 0.25%]	  for (; iterations<N && fabs(ds)>DBL_EPSILON * s; ++iterations) {
+1484:     .         	#if defined (ENABLE_CHANGING_THE_MAXIMUM_ITERATION_COUNT)
+1485:     .         	    if (ds * ds_previous < 0)
+1486:     .         	      ++direction_reversal_count;
+1487:     .         	    if (N > 3 && iterations > 0 && (3 == direction_reversal_count || !(s > s_left && s < s_right))) {
+1488:     .         	      // If looping inefficently, or the forecast step takes us outside the bracket, or onto its edges, switch to binary nesting.
+1489:     .         	      // NOTE that this can only really happen for very extreme values of |x|, such as |x| = |ln(F/K)| > 500.
+1490:     .         	#ifdef LOG_BINARY_NESTING
+1491:     .         	      if (direction_reversal_count > 2)
+1492:     .         	        printf("Intercepting excessive direction reversal in highest branch.\n");
+1493:     .         	      else
+1494:     .         	        printf("Intercepting bracket boundary contact/violation in highest branch.\n");
+1495:     .         	#endif
+1496:     .         	      s = 0.5 * (s_left + s_right);
+1497:     .         	      if (s_right - s_left <= DBL_EPSILON * s) break;
+1498:     .         	      direction_reversal_count = 0;
+1499:     .         	      ds = 0;
+1500:     .         	    }
+1501:     .         	    ds_previous = ds;
+1502:     .         	#endif
+1503:     .         	    assert(s > 0);
+1504:    46 [ 0.09%]	    const double b = normalised_black(θx, s), inv_bp = inv_normalised_vega(θx, s), ν = (𝛽 - b) * inv_bp, h = θx / s, x²_over_s³ = (h * h) / s, h₂ = x²_over_s³ - s * 0.25, h₃ = h₂ * h₂ - 3 * (x²_over_s³ / s) /* = (h/s)² */ - 0.25;
+1505:     .         	#if defined (ENABLE_CHANGING_THE_MAXIMUM_ITERATION_COUNT)
+1506:     .         	    if (b > 𝛽 && s < s_right) s_right = s; else if (b<𝛽 && s>s_left) s_left = s; // Tighten the bracket if applicable.
+1507:     .         	#endif
+1508:   170 [ 0.33%]	    ds = ν * householder_factor(ν, h₂, h₃);
+1509:     .         	#if defined( SAFEGUARD_STEP_AGAINST_BRACKETS )
+1510:     .         	    // Never leave the branch (or bracket)
+1511:     .         	    s = take_step(s_left, s_right, s, ds);
+1512:     .         	#else
+1513:    55 [ 0.11%]	    s += ds;
+1514:     .         	#endif
+1515:     .         	    assert(s > 0);
+1516:     .         	  }
+1517:     .         	  return implied_volatility_output(iterations, s);
+1518:   221 [ 0.43%]	}
+1519:     .         	
+1520:     .         	double NormalisedBlack(double x, double s, double θ /* θ=±1 */) {
+1521:     .         	  // Specialisation for x = 0 where b(s) = 1-2·Φ(-s/2) = erf(s/√8).
+1522:     .         	  if (0 == x) return erf_cody((0.5 / SQRT_TWO) * s);
+1523:     .         	  return normalised_intrinsic(θ < 0 ? -x : x) + (s <= 0 ? 0 : normalised_black(-fabs(x), s)); /* Reciprocal-strike call-put equivalence */
+1524:     .         	}
+1525:     .         	
+1526:     .         	double Black(double F, double K, double sigma, double T, double θ /* θ=±1 */) {
+1527:     .         	  const double s = sigma * sqrt(T);
+1528:     .         	  // Specialisation for x = 0 where b(s) = 1-2·Φ(-s/2) = erf(s/√8).
+1529:     .         	  if (K == F) return F * erf_cody((0.5 / SQRT_TWO) * s);
+1530:     .         	  // Map in-the-money to out-of-the-money
+1531:     .         	  return std::max(θ < 0 ? K - F : F - K, 0.0) + (s <= 0 ? 0 : (sqrt(F) * sqrt(K)) * normalised_black(-fabs(log(F / K)), s));
+1532:     .         	}
+1533:     .         	
+1534:     .         	//    b̄(x,s,θ)          :=   bₘₐₓ(x,θ)   -  b(x,s,θ)
+1535:     .         	//                       =   exp(θ·x/2)  -  θ·[ exp(θx/2)·Φ(θ·(x/s+s/2)) - exp(-θx/2)·Φ(θ·(x/s-s/2)) ]                |     using  bₘₐₓ = exp(θ·x/2)
+1536:     .         	//
+1537:     .         	//                           ⎧   exp(θx/2)·[1-Φ(x/s+s/2)] + exp(-θx/2)·Φ(x/s-s/2)                                     |     when θ = +1
+1538:     .         	//                       =   ⎨ 
+1539:     .         	//                           ⎩   exp(θx/2)·Φ(-x/s-s/2)    + exp(-θx/2)·[1-Φ(-x/s+s/2)]                                |     when θ = -1
+1540:     .         	// 
+1541:     .         	//                       =   exp(θx/2)·Φ(-x/s-s/2) + exp(-θx/2)·Φ(x/s-s/2)                                            |     for both θ = ±1
+1542:     .         	// 
+1543:     .         	double ComplementaryNormalisedBlack(double x, double s) { return complementary_normalised_black(x / s, s / 2); }
+1544:     .         	
+1545:   190 [ 0.37%]	double ImpliedBlackVolatility(double price, double F, double K, double T, double θ /* θ=±1 */) {
+1546:     .         	  if (price >= (θ < 0 ? K : F))
+1547:     1 [ 0.01%]	    return implied_volatility_output(0, VOLATILITY_VALUE_TO_SIGNAL_PRICE_IS_ABOVE_MAXIMUM);
+1548:     .         	  const double μ = θ < 0 ? K - F : F - K; // Map in-the-money to out-of-the-money
+1549:   151 [ 0.29%]	  return lets_be_rational((μ > 0 ? price - μ : price) / (sqrt(F) * sqrt(K)), -fabs(log(F / K)), IMPLIED_VOLATILITY_MAXIMUM_ITERATIONS) / sqrt(T);
+1550:  1347 [ 2.57%]	}
+1551:     .         	
+1552:     .         	double NormalisedImpliedBlackVolatility(double 𝛽, double x, double θ /* q=±1 */) {
+1553:     .         	  // Map in-the-money to out-of-the-money
+1554:     .         	  return lets_be_rational(𝛽 - normalised_intrinsic(θ < 0 ? -x : x), -fabs(x), IMPLIED_VOLATILITY_MAXIMUM_ITERATIONS);
+1555:     .         	}
+1556:     .         	
+1557:     .         	double NormalisedVega(double x, double s) {
+1558:     .         	  const double ax = fabs(x);
+1559:     .         	  if (ax <= 0)
+1560:     .         	    return (1 / SQRT_TWO_PI) * exp(-0.125 * s * s);
+1561:     .         	  if (s <= 0 || s <= ax * SQRT_DBL_MIN)
+1562:     .         	    return 0;
+1563:     .         	  return normalised_vega(x, s);
+1564:     .         	}
+1565:     .         	
+1566:     .         	double Vega(double F, double K, double sigma, double T) { return (sqrt(F) * sqrt(K)) * NormalisedVega(log(F / K), sigma * sqrt(T)) * sqrt(T); }
+1567:     .         	
+1568:     .         	double Volga(double F, double K, double sigma, double T) { return (sqrt(F) * sqrt(K)) * normalised_volga(log(F / K), sigma * sqrt(T)) * T; }
+1569:     .         	
+1570:     .         	double NormalisedVolga(double x, double s) { return normalised_volga(x, s); }
+1571:     .         	
+1572:     .         	double DblEpsilon() { return DBL_EPSILON; }
+1573:     .         	
+1574:     .         	double DblMin() { return DBL_MIN; }
+1575:     .         	
+1576:     .         	double DblMax() { return DBL_MAX; }
+1577:     .         	
+1578:     .         	// Floating point numbers have finite precision. The resolution limit is defined as the smallest positive number ε such that 1 and 1+ε still have distinct representations
+1579:     .         	// in the respectively used floating point model. For standard IEEE 754 double precision (64 bit, 53 bit mantissa), that's about 2.22E-16 and defined as DBL_EPSILON in C/C++.
+1580:     .         	// We thus have to always assume that any input x into any function f() comes as a number that is representative for some number in the range (x-ε·x,x+ε·x). We will denote
+1581:     .         	// the concept of 'some number in the range (x-δx,x+δx)' as x±δx.
+1582:     .         	// 
+1583:     .         	// Error propagation in generic function evaluation.
+1584:     .         	// =================================================
+1585:     .         	//    Given an input number x with associated absolute precision δx, the evaluation of a function f(x) will incur both the uncertainty in the input as well as the finite
+1586:     .         	// precision of the representation of the result of the evaluation. In other words, instead of y = f(x), by propagation as well as incurred evaluation imprecision, we have
+1587:     .         	//    y±δy = f(x±δx)·(1±ε)
+1588:     .         	// which is to lowest order
+1589:     .         	//         = f(x) ± f'(x)·δx ± f(x)·ε
+1590:     .         	// Given that the two uncertainty terms on the right hand side can accumulate, net, using y = f(x) as the target (infinite precision) result, this means 
+1591:     .         	//    |δy| = |f'(x)·δx| + |f(x)·ε|
+1592:     .         	// which brings us to the *relative* precision of y as
+1593:     .         	//    |δy/y| = |f'(x)·δx/f(x)| + ε
+1594:     .         	// IF the input precision on x was |δx| = |x|·ε, we arrive at
+1595:     .         	//    |δy/y| = ( |x·f'(x)/f(x)| + 1 ) · ε.
+1596:     .         	// 
+1597:     .         	// Error propagation in inverse function evaluation.
+1598:     .         	// =================================================
+1599:     .         	// Given a function g(y) that is the inverse of another function f(·) such that g(f(x)) = x [in perfect arithmetic], we obtain from y = f(x) and x = g(y) via the same
+1600:     .         	// logic as above
+1601:     .         	//    |δx/x|  =  ( |y·g'(y)/g(y)| + 1 ) · ε   =  ( |f(x)/(x·f'(x))| + 1 ) · ε.
+1602:     .         	// In other words, if the evaluation of y := f(x) incurs a precision deterioration given by the multiplicative factor ( 1 + γ ) [where γ>0], i.e., if the input (relative) precision in x
+1603:     .         	// was ε and the output (relative) precision in y was (1+γ)·ε, then the evaluation of x := f⁻¹(y) results in the (relative) precision worsening from η := |δy/y| to |δx/x| = (1+1/γ)·η.
+1604:     .         	// 
+1605:     .         	// Error propagation in inverse functions with offset.
+1606:     .         	// ===================================================
+1607:     .         	// Consider a function f(x) limited from above by its x→∞ asymptotic value fₘₐₓ. Consider that we have, at least in theory, access to the [infinite precision] complementary
+1608:     .         	// function f̄(x) := fₘₐₓ - f(x). Naturally, we have f̄(x)→0 for x → ∞ , though an inverse of f̄(x) can be very well defined numerically just as the inverse of exp(-x) is well
+1609:     .         	// defined as x = -ln(y) for y = exp(-x). Having clarified the above, we now in fact seek the inverse of f(x) which obviously satisfies f(x) = fₘₐₓ - f̄(x). In support of
+1610:     .         	// finding the inverse of y = f(x), we define ȳ := fₘₐₓ - y and the inverse of f̄ as ̄ḡ(·) = f̄⁻¹(·) which is evaluated from any input value y as x := ḡ(fₘₐₓ-y). Note that we
+1611:     .         	// need to pay attention that the evaluation ȳ = ȳ(y) = fₘₐₓ - y incurs itself from any input value y±δy the error propagation
+1612:     .         	//     ȳ±δȳ  =  (fₘₐₓ-(y±δy))·(1±ε)  =  (fₘₐₓ-y) ± δy ± (fₘₐₓ-y)·ε ± δy·ε.
+1613:     .         	// Setting |δy| = |y|·ε since y is an input value, and using ȳ=fₘₐₓ-y gives us (recall that we must alas always accumulate errors in absolute value) to lowest order in ε
+1614:     .         	//     |δȳ|  =  (|y|+|ȳ|)·ε ,
+1615:     .         	// i.e.,
+1616:     .         	//     |δȳ/ȳ|  =  (1+|y/ȳ|)·ε .
+1617:     .         	// We now compute the error propagation of the inverse function evaluation ḡ(ȳ) with ȳ=(fₘₐₓ-y) from the input y±δy with |δy| = |y|·ε to lowest order in ε as follows:
+1618:     .         	//     x±δx  =  ḡ(ȳ±δȳ)·(1±ε)
+1619:     .         	//           =  ḡ(ȳ±(|y|+|ȳ|)·ε)·(1±ε)
+1620:     .         	//           =  ḡ(ȳ) ± ḡ'(ȳ)·(|y|+|ȳ|)·ε ± ḡ(ȳ)·ε
+1621:     .         	// Since ḡ(ȳ)=x, this yields
+1622:     .         	//     |δx|  =  [ |ḡ'(ȳ)|·(|y|+|ȳ|) + |x| ] · ε.
+1623:     .         	// Using ḡ'(ȳ) = 1/f̄'(x) and |f̄'(x)| = |f'(x)|, we continue
+1624:     .         	//     |δx|  =  [ (|y|+|ȳ|)/|f'(x)| + |x| ] · ε
+1625:     .         	// whence
+1626:     .         	//   |δx/x|  =  [ |f(x)|/|x·f'(x)|·(1+|fₘₐₓ/f(x)-1|) + 1 ] · ε .
+1627:     .         	// For x → ∞, we have f(x) → fₘₐₓ which brings us back to
+1628:     .         	//   |δx/x|  ≈  [ |f(x)|/|x·f'(x)| + 1 ] · ε
+1629:     .         	// despite the fact that the *relative* accuracy of the complementary value ȳ = f̄(x) diverges according to |δȳ/ȳ|  =  (1+|y/ȳ|)·ε when ȳ → 0 in the limit of x → ∞.
+1630:     .         	// 
+1631:     .         	// The attainable *relative* accuracy of 𝛽 = b(s) when s has *relative* accuracy ε is (to lowest order) (|s·b'(s)/b(s)|+1)·ε --- see the source code for a detailed derivation.
+1632:     .         	// The attainable *relative* accuracy of s = b⁻¹(𝛽) when 𝛽 has *relative* accuracy ε is (to lowest order) (|b(s)/(s·b'(s))|+1)·ε .
+1633:     .         	// This function returns (s·∂b(x,s)/∂s)/b(x,s,θ=±1). In order to get the accuracy limit of implied volatility calculations, take (1+1/BlackAccuracyFactor(x,s,θ))·DBL_EPSILON.
+1634:     .         	
+1635:     .         	// NOTE: this function requires s > 0 and θx != 0.
+1636:     .         	inline double scaled_normalised_black(double θx, double s) {
+1637:     .         	  assert(s > 0 && θx != 0);
+1638:     .         	  return (θx > 0 ? normalised_intrinsic(θx) * SQRT_TWO_PI * exp(0.5 * (square(θx / s) + 0.25 * s * s)) : 0) + std::get<0>(scaled_normalised_black_and_ln_vega(-fabs(θx), s));
+1639:     .         	}
+1640:     .         	
+1641:     .         	// Returns s · ∂(b(x,s)/∂s) / b(x,s) .
+1642:     .         	double BlackAccuracyFactor(double x, double s, double θ /* θ=±1 */) {
+1643:     .         	  // When x = 0, we have bx(x,s) = b(x,s) / (∂(b(x,s)/∂s)  =  s·(1+s²/12+s⁴/240+O(s⁶)) for small s.
+1644:     .         	  if (0 == x)
+1645:     .         	    return fabs(s) < DBL_EPSILON ? 1 : s / (erf_cody((0.5 / SQRT_TWO) * s) * SQRT_TWO_PI * exp(0.125 * s * s));
+1646:     .         	  const double θx = θ < 0 ? -x : x;
+1647:     .         	  // bx(x,s) = b(x,s) / (∂(b(x, s) / ∂s)
+1648:     .         	  // For x < 0 (strictly), we have the s→0 asymptotic bx(x,s) = b(x,s) / (∂(b(x, s) / ∂s) → s²/x².
+1649:     .         	  return s <= 0 ? (θx > 0 ? 0 : DBL_MAX) : s / scaled_normalised_black(θx, s);
+1650:     .         	}
+1651:     .         	
+1652:     .         	// Returns  DBL_EPSILON · (1 + |b(x,s) / (s·∂(b(x,s)/∂s)|) .
+1653:     .         	double ImpliedVolatilityAttainableAccuracy(double x, double s, double θ /* θ=±1 */) {
+1654:     .         	  // When x = 0, we have bx(x,s) = b(x,s) / (∂(b(x,s)/∂s)  =  s·(1+s²/12+s⁴/240+O(s⁶)) for small s.
+1655:     .         	  if (0 == x)
+1656:     .         	    return DBL_EPSILON * (1 + fabs(s <= DBL_EPSILON ? 1 : (erf_cody((0.5 / SQRT_TWO) * s) * SQRT_TWO_PI * exp(0.125 * s * s)) / s));
+1657:     .         	  const double θx = θ < 0 ? -x : x;
+1658:     .         	  // For x < 0 (strictly), we have the s→0 asymptotic bx(x,s) = b(x,s) / (∂(b(x, s) / ∂s) → s²/x².
+1659:     .         	  if (s <= 0) // bx_over_s = (θx > 0 ? DBL_MAX : 0); return std::min( DBL_EPSILON * (1 + bx_over_s) , 1.0 );
+1660:     .         	    return θx > 0 ? 1 : DBL_EPSILON;
+1661:     .         	  const double bx = scaled_normalised_black(θx, s);
+1662:     .         	  return bx * normalised_vega(θx, s) >= DBL_MIN ? DBL_EPSILON * (1 + fabs(bx / s)) : 1;
+1663:     .         	}
+1664:     .         	
+1665:     .         	#if !defined(NO_XL_API)
+1666:     .         	
+1667:     .         	# include "XLFunctions.h"
+1668:     .         	
+1669:     .         	// "" maps to the C name of the function, "." maps to <XL-Category>.<C-function-name>.
+1670:     .         	DECLARE_XL_FUNCTION(Black, { "","." }, "BBBBBB$", "F,K,sigma,T,q", "The Black [1976] option value Black(F,K,sigma,T,q).", { "the Forward.", "the Strike.", "the volatility.", "the time to expiry.", "q=+/-1 for calls/puts." });
+1671:     .         	
+1672:     .         	DECLARE_XL_FUNCTION(NormalisedBlack, { "","." }, "BBBB$", "x,s,q",
+1673:     .         	                    "The normalised Black call option value [exp(x/2)·Phi(x/s+s/2)-exp(-x/2)·Phi(x/s-s/2)] with x=ln(F/K) and s=sigma·sqrt(T).",
+1674:     .         	                    { "x=ln(F/K)", "s=sigma·sqrt(T).", "q=+/-1 for calls/puts." });
+1675:     .         	
+1676:     .         	DECLARE_XL_FUNCTION(ImpliedBlackVolatility, { "",".","ImpliedVolatility",".ImpliedVolatility" }, "BBBBBB$", "price,F,K,T,q",
+1677:     .         	                    "The implied volatility sigma such that the given price equals the Black option value [F·Phi(q·(x/s+s/2))-K·Phi(q·(x/s-s/2))] with x=ln(F/K) and s=sigma·sqrt(T).",
+1678:     .         	                    { "price=Black(F,K,sigma,T,q)", "the Forward.", "the Strike.", "the time to expiry.", "q=+/-1 for calls/puts." });
+1679:     .         	
+1680:     .         	extern "C" DLL_EXPORT double NormalisedImpliedBlackVolatilityForExcel(double 𝛽, double x, double θ /* θ=±1 */, const XLOper & xlN) {
+1681:     .         	  // Map in-the-money to out-of-the-money
+1682:     .         	  return lets_be_rational(𝛽 - normalised_intrinsic(θ < 0 ? -x : x), -fabs(x), xlN.isUndefined() ? IMPLIED_VOLATILITY_MAXIMUM_ITERATIONS : xlN.to_int());
+1683:     .         	}
+1684:     .         	
+1685:     .         	DECLARE_XL_FUNCTION(NormalisedImpliedBlackVolatilityForExcel, { "NormalisedImpliedBlackVolatility",".NormalisedImpliedBlackVolatility","NormalisedImpliedVolatility",".NormalisedImpliedVolatility" }, "BBBB?$", "normalised_price,x,q,[n]",
+1686:     .         	                    "The normalised implied volatility s such that the given normalised price equals the normalised Black option value [exp(x/2)·Phi(q·(x/s+s/2))-exp(-x/2)·Phi(q·(x/s-s/2))] with x=ln(F/K) and s=sigma·sqrt(T).",
+1687:     .         	                    { "normalised_price=Black(F,K,sigma,T,q)/sqrt(F·K)", "x=ln(F/K).", "q=+/-1 for calls/puts.", "the number of iterations, e.g., 0 gives you the initial guess in \"Let's Be Rational\". Omit if you want to allow for the default number (usually 2)." });
+1688:     .         	
+1689:     .         	DECLARE_XL_FUNCTION(BlackAccuracyFactor, { "." }, "BBBB$", "x,s,q",
+1690:     .         	                    "Returns the accuracy degradation factor g for the normalised Black function. The attainable relative accuracy for the Black function is then (1+|g|)·DblEpsilon(), and the attainable relative accuracy for implied volatility is (1+1/|g|)·DblEpsilon().",
+1691:     .         	                    { "x=ln(F/K)", "s=sigma·sqrt(T).", "q=+/-1 for calls/puts." });
+1692:     .         	
+1693:     .         	DECLARE_XL_FUNCTION(norm_cdf, { "CumNorm",".CumNorm" }, "BB$", "x",
+1694:     .         	                    "The cumulative normal distribution for the given argument x.",
+1695:     .         	                    { "the argument." });
+1696:     .         	
+1697:     .         	DECLARE_XL_FUNCTION(inverse_norm_cdf, { "InvCumNorm",".InvCumNorm" }, "BB$", "p",
+1698:     .         	                    "The inverse cumulative normal distribution for the given probability p.",
+1699:     .         	                    { "the probability." });
+1700:     .         	
+1701:     .         	DECLARE_XL_FUNCTION(Vega, { "","." }, "BBBBB$", "F,K,σ,T", "The Black [1976] option value sensitivity ∂Black(F,K,σ,T)/∂σ.", { "the Forward.", "the Strike.", "the volatility.", "the time to expiry." });
+1702:     .         	
+1703:     .         	DECLARE_XL_FUNCTION(NormalisedVega, { "","." }, "BBB$", "x,s", "The normalised Black option value sensitivity ∂b(x,s)/∂s.", { "x=ln(F/K)", "s=σ·√T." });
+1704:     .         	
+1705:     .         	DECLARE_XL_FUNCTION(Volga, { "","." }, "BBBBB$", "F,K,σ,T", "The Black [1976] option value sensitivity ∂²Black(F,K,σ,T)/∂σ².", { "the Forward.", "the Strike.", "the volatility.", "the time to expiry." });
+1706:     .         	
+1707:     .         	DECLARE_XL_FUNCTION(NormalisedVolga, { "","." }, "BBB$", "x,s", "The normalised Black option value sensitivity ∂²b(x,s)/∂s².", { "x=ln(F/K)", "s=σ·√T." });
+1708:     .         	
+1709:     .         	DECLARE_XL_FUNCTION(DblEpsilon, { "","." }, "B$", "", "Returns DBL_EPSILON.", { });
+1710:     .         	
+1711:     .         	DECLARE_XL_FUNCTION(DblMin, { "","." }, "B$", "", "Returns DBL_MIN.", { });
+1712:     .         	
+1713:     .         	DECLARE_XL_FUNCTION(DblMax, { "","." }, "B$", "", "Returns DBL_MAX.", { });
+1714:     .         	
+1715:     .         	DECLARE_XL_FUNCTION(ComplementaryNormalisedBlack, { "." }, "BBB$", "x,s",
+1716:     .         	                    "The complementary normalised Black option value b̄(x,s) = bₘₐₓ(x,θ) - b(x,s,θ) = exp(½x)·Φ(-x/s-s/2) + exp(-½x)·Φ(x/s-s/2) with x=ln(F/K) and s=sigma·sqrt(T), where b_max = exp(θ·x/2). The dependency on θ cancels out.",
+1717:     .         	                    { "x=ln(F/K)", "s=sigma·sqrt(T)." });
+1718:     .         	
+1719:     .         	DECLARE_XL_FUNCTION(ImpliedVolatilityAttainableAccuracy, { ".ImpliedVolatilityAttainableAccuracy",".ImpliedBlackVolatilityAttainableAccuracy" }, "BBBB$", "x,s,q",
+1720:     .         	                    "The theoretically attainable accuracy of implied volatility according to error propagation analysis (1st order):  (|b(s)/(s·b'(s))|+1)·ε  where ε = DBL_EPSILON. Returns 1 to signal complete loss of accuracy.",
+1721:     .         	                    { "x=ln(F/K).", "q=+/-1 for calls/puts." });
+1722:     .         	
+1723:     .         	//#define EXPOSE_BL_AND_BU_OVER_BMAX
+1724:     .         	#if defined( USE_UNIVARIATE_RATIONAL_FUNCTION_APPROXIMATIONS_FOR_BL_AND_BU_OVER_BMAX ) && defined( EXPOSE_BL_AND_BU_OVER_BMAX )
+1725:     .         	extern "C" DLL_EXPORT double BlOverBmax(double x) { return bₗ_over_bₘₐₓ(sqrt(2 * fabs(x))); }
+1726:     .         	DECLARE_XL_FUNCTION(BlOverBmax, { "." }, "BB$", "|x|", "bl(x)/bmax(x).", { "x=ln(F/K)." });
+1727:     .         	extern "C" DLL_EXPORT double BuOverBmax(double x) { return bᵤ_over_bₘₐₓ(sqrt(2 * fabs(x))); }
+1728:     .         	DECLARE_XL_FUNCTION(BuOverBmax, { "." }, "BB$", "|x|", "bu(x)/bmax(x).", { "x=ln(F/K)." });
+1729:     .         	#endif
+1730:     .         	
+1731:     .         	#define EXPOSE_ERF_AND_ERFINV
+1732:     .         	#if defined( EXPOSE_ERF_AND_ERFINV )
+1733:     .         	double erfinv(double);
+1734:     .         	extern "C" DLL_EXPORT double Erf(double x) { return erf_cody(x); }
+1735:     .         	extern "C" DLL_EXPORT double ErfInv(double e) { return erfinv(e); }
+1736:     .         	DECLARE_XL_FUNCTION(Erf, { "." }, "BB$", "x", "returns erf(x) = ∫₀ˣ exp(-z²) dz · 2/√π.", { "x." });
+1737:     .         	DECLARE_XL_FUNCTION(ErfInv, { "." }, "BB$", "𝑒", "returns the inverse of erf(x) = ∫₀ˣ exp(-z²) dz · 2/√π, i.e., finds x such that 𝑒 = erf(x).", { "𝑒." });
+1738:     .         	#endif
+1739:     .         	
+1740:     .         	# ifdef ENABLE_CHANGING_THE_MAXIMUM_ITERATION_COUNT
+1741:     .         	DECLARE_XL_FUNCTION(set_implied_volatility_maximum_iterations, ".", "JJ$", "n", "Sets and returns the maximum number of iterations in implied volatility calculations. Negative inputs leave the status unchanged (use for enquiry).", { "the requested maximum number." });
+1742:     .         	# endif
+1743:     .         	
+1744:     .         	# ifdef ENABLE_CHANGING_THE_HOUSEHOLDER_METHOD_ORDER
+1745:     .         	DECLARE_XL_FUNCTION(set_implied_volatility_householder_method_order, ".", "JJ$", "order", "Sets and returns the Householder method order in implied volatility calculations. Negative inputs leave the status unchanged (use for enquiry).", { "the requested order: 2[=Newton], 3[=Halley], or 4[=Householder(3)]." });
+1746:     .         	# endif
+1747:     .         	
+1748:     .         	# ifdef ENABLE_SWITCHING_THE_OUTPUT_TO_ITERATION_COUNT
+1749:     .         	DECLARE_XL_FUNCTION(set_implied_volatility_output_type, ".", "JJ$", "type", "Sets and returns the output value of implied volatility function invocations. When 0, those functions returned the [normalised] implied volatility, else the iteration count [divided by sqrt(T) unless normalised].", { "the requested output type: 0 or 1." });
+1750:     .         	# endif
+1751:     .         	
+1752:     .         	#endif // !defined(NO_XL_API)
