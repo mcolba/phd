@@ -1,0 +1,51 @@
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+  "COM812",  # Trailing comma missing
+  "ANN002",  # Missing type annotation for `*args`
+  "D102"     # Missing docstring in public method
+]
+
+# Exclude common directories
+exclude = [
+    ".github",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "build"
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.isort]
+known-first-party = ["phd"]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "phd"
+version = "0.0.1"
+description = "Volatility Risk for Risk Managers"
+authors = [{ name = "Marco", email = "marco.colbacchini@gmail.com" }]
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest", "coverage"]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]

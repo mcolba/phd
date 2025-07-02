@@ -24,11 +24,11 @@ jobs:
         run: pip install cibuildwheel
 
       - name: Build letsberational Windows wheel
-        working-directory: ${{ github.workspace }}\cpp\third_party\jaeckel
+        working-directory: ${{ github.workspace }}\src\third_party\jaeckel
         run: cibuildwheel --platform windows --output-dir wheelhouse
 
       - name: Upload wheel artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-wheel
-          path: ${{ github.workspace }}/cpp/third_party/jaeckel/wheelhouse/*.whl
+          path: ${{ github.workspace }}/src/third_party/jaeckel/wheelhouse/*.whl

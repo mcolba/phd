@@ -1,0 +1,31 @@
+# === Python ===
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.log
+
+# === Build artifacts ===
+build/
+dist/
+*.so
+*.pyd
+*.dll
+*.dylib
+*.o
+*.obj
+*.a
+*.lib
+*.exp
+*.whl
+
+# === CMake ===
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# === IDE/editor junk ===
+.vscode/
+.idea/
+.DS_Store
+.ruff_cache/
