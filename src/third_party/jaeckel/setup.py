@@ -13,7 +13,6 @@ Note:
     Run generate_wrappers.bat first to generate the SWIG wrapper files.
 """
 
-import os
 from pathlib import Path
 from setuptools import setup, Extension, find_packages
 import platform
@@ -65,7 +64,7 @@ letsberational_module = Extension(
 setup(
     name="letsberational",
     version=VERSION,
-    description="Simplified Python bindings for LetsBeRational option pricing library",
+    description="Simplified Python bindings for LetsBeRational option pricing library.",
     # Package configuration
     packages=find_packages(include=["letsberational"]),
     package_dir={"letsberational": "letsberational"},
