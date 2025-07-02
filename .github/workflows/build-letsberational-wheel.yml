@@ -27,7 +27,6 @@ jobs:
         run: pip install cibuildwheel
 
       - name: Build letsberational Windows wheel
-        shell: cmd
         working-directory: ${{ github.workspace }}\cpp\third_party\jaeckel
         run: cibuildwheel --platform windows --output-dir wheelhouse
 
