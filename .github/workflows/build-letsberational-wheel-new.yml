@@ -1,21 +1,13 @@
-name: Build LetsBeRational Windows Wheel
-
-on:
-  push:
-    tags:
-      - 'v*'
-  workflow_dispatch:
-
 jobs:
-  build_wheel_windows:
+  build-windows:
     runs-on: windows-latest
 
     defaults:
       run:
-        shell: powershell
+        shell: cmd
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -26,13 +18,16 @@ jobs:
       - name: Install cibuildwheel
         run: pip install cibuildwheel
 
-      - name: Build letsberational Windows wheel
-        shell: cmd
+      - name: Generate SWIG wrapper
+        working-directory: ${{ github.workspace }}\cpp\third_party\jaekel
+        run: generate_wrappers.bat
+
+      - name: Build letsberational wheel
         working-directory: ${{ github.workspace }}\cpp\third_party\jaekel
         run: cibuildwheel --platform windows --output-dir wheelhouse
 
-      - name: Upload wheel artifact
+      - name: Upload wheel
         uses: actions/upload-artifact@v4
         with:
-          name: windows-wheel
-          path: ${{ github.workspace }}/cpp/third_party/jaekel/wheelhouse/*.whl
+          name: letsberational-wheel
+          path: cpp/third_party/jaekel/wheelhouse/*.whl
