@@ -1,10 +1,7 @@
 name: Build LetsBeRational Windows Wheel
 
 on:
-  push:
-    tags:
-      - 'v*'
-  workflow_dispatch:
+  workflow_dispatch: # Manual trigger only
 
 jobs:
   build_wheel_windows:
