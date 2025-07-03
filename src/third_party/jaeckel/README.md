@@ -86,7 +86,7 @@ price = black_price(forward, strike, original_sigma, maturity, option_type)
 implied_sigma = implied_black_vol(price, forward, strike, maturity, option_type)
 ```
 
-## Project Structure
+## Module Structure
 
 ```
 src/third_party/jaeckel/
