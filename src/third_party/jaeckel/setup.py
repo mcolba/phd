@@ -38,13 +38,24 @@ DEFINE_MACROS = [
 
 # Platform-specific compiler arguments - mimiking the original Makefile setup
 if platform.system() == "Windows":
-    # MSVC equivalents of original g++ flags only
+    # MSVC flags mimiking the setup in LetsBeRational.vcxproj
     COMPILE_ARGS = [
-        "/O2",  # Equivalent to -O3 (optimize for speed)
-        "/fp:fast",  # Equivalent to -Ofast/-ffast-math
-        "/utf-8",  # Equivalent to -finput-charset=UTF-8 (for Greek characters)
+        "/O2",              # 	Full optimization
+        "/Oi",              # Enable intrinsic functions
+        "/Ot",              # Favor fast code over size
+        "/fp:fast",         # Fast floating-point model
+        "/arch:AVX2",       # Use AVX2 instruction set
+        "/GL",              # Whole program optimization
+        "/std:c++latest",   # Use the latest C++ standard
+        "/MD",              # Use multi-threaded DLL runtime
+        "/utf-8",           # Use UTF-8 encoding (for greek alphabet support)
+        "/fp:contract",      # Enable floating-point contraction
     ]
-    LINK_ARGS = []  # No special linker args in original
+    LINK_ARGS = [
+        "/LTCG",                # Link-time code generation
+        "/OPT:REF",             # Remove unreferenced functions and data
+        "/OPT:ICF",             # Merge identical COMDATs
+    ]
 else:
     msg = "Unsupported platform."
     raise RuntimeError(msg)

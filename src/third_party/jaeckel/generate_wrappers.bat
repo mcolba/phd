@@ -8,7 +8,7 @@ REM Create output directory if it doesn't exist
 if not exist "letsberational" mkdir letsberational
 
 REM Run SWIG to generate the wrapper files
-swig -c++ -python -outdir letsberational -o letsberational\LetsBeRational_wrap.cpp LetsBeRational_Simplified.i
+swig -c++ -python -outdir letsberational -o letsberational\LetsBeRational_wrap.cpp LetsBeRationalSimplified.i
 
 if %ERRORLEVEL% neq 0 (
     echo ERROR: SWIG wrapper generation failed!
