@@ -1,19 +1,25 @@
-"""Protocols and data structures for option pricing, volatility surfaces, and risk management."""
+"""Protocols and data structures for option pricing, volatility surfaces, and risk management.
+"""
 
 import datetime as dt
 from abc import ABC
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import jax.numpy as jnp
 import numpy as np
 import pandas as pd
-from cached_property import cached_property
+from pandera import Check, Column, DataFrameSchema
 
 """
 TODO: Move implementations out of here, keep only protocols and abstract classes.
 TODO: adopt registry pattern.
 """
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Dataclasses
+# ---------------------------------------------------------------------------------------------------------------------
 
 Array = np.ndarray | jnp.ndarray
 
@@ -28,25 +34,48 @@ class Interpolator(Protocol):
 Curve = tuple[Array, Interpolator]
 
 
+option_chain_schema = DataFrameSchema(
+    columns={
+        "anchor": Column(dt.date, required=True),
+        "strike": Column(float, Check.ge(0), required=True),
+        "expiry": Column(dt.date, required=True),
+        "bit": Column(int, required=True),
+        "ask": Column(int, required=True),
+        "volume": Column(int, required=True),
+        "spot": Column(float, required=True),
+        "option_type": Column(str, Check.isin(["call", "put"]), required=True),
+    },
+    checks=[Check(lambda df: df["expiry"] >= df["anchor"])],
+    unique=["strike", "expiry"],
+    coerce=True,
+    strict=False,  # allows extra columns
+)
+
+
 @dataclass(frozen=True)
 class OptionChain:
+    """Option chain data."""
+
     df: pd.DataFrame
 
-    @cached_property
+    def __post_init__(self):
+        object.__setattr__(self, "df", option_chain_schema.validate(self.df))
+
+    @property
     def strikes(self) -> Array:
         arr = self.df["strike"].to_numpy(copy=False)
         arr.flags.writeable = False
         return arr
 
-    @cached_property
+    @property
     def expiries(self) -> Array:
         arr = self.df["expiry"].to_numpy(copy=False)
         arr.flags.writeable = False
         return arr
 
-    @cached_property
+    @property
     def mid_prices(self) -> Array:
-        arr = self.df["mid_price"].to_numpy(copy=False)
+        arr = (self.df["bid"] - self.df["ask"]).to_numpy(copy=False)
         arr.flags.writeable = False
         return arr
 
@@ -55,20 +84,53 @@ class OptionChain:
 
 @dataclass(frozen=True)
 class VolCalibrationContext:
+    """Market data used in calibration."""
+
     rate_curve: tuple[Array, Interpolator]
     forward_curve: tuple[Array, Interpolator]
 
 
 @dataclass(frozen=True)
 class ValuationContext:
-    date: dt.datetime
+    anchor: dt.datetime
     vol_surface: "VolSurface"
     rates: Array
 
 
+@dataclass(frozen=True)
+class CalibrationSettings:
+    """The input parameters for the calibration routine."""
+
+    initial_guess: Array
+    solver_settings: Array
+    # ...
+
+
+@dataclass(frozen=True)
+class CalibrationResult:
+    """The output of a successful calibration."""
+
+    params: Array
+    fit_error: float | None = None
+
+
+@dataclass(frozen=True)
+class EuropeanOption:
+    expiry: Array
+    strike: Array
+    option_type: Array
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Valuation protocols and abstract classes
+# ---------------------------------------------------------------------------------------------------------------------
+
+
 @runtime_checkable
 class VolInterpolator(Protocol):
-    """Protocol is used since an interpolator can be both a spline or a pricing model.
+    """Valatility interpolation method.
+
+    Protocol is used since an interpolator can be both a spline or a valuation model.
 
     # ========== Example 1 (Closure) ========== #
 
@@ -101,21 +163,42 @@ class VolSurface:
         return self._interpolator(t, k)
 
 
-@dataclass(frozen=True)
-class CalibrationConfig:
-    initial_guess: Array
-    # ...
+class ValuationModel(ABC):
+    """Valuation model.
 
+    Can be used both for interpolation and valuation of vanillas.
+    """
 
-@dataclass(frozen=True)
-class CalibrationResult:
-    surface: "VolSurface"
-    calibrated_params: Array
-    # ...
+    params: Array
+
+    def __call__(self, t, k) -> Array:
+        """Thanks to this we can use an option pricer as interpolator"""
+        raise NotImplementedError
+
+    def value(self):
+        """Value of put and cal options."""
+        raise NotImplementedError
+
+    def make_vol_interpolator(self) -> VolInterpolator:
+        """Returns an VolInterpolator protocol that can be used to construct a VolSurface."""
+        raise NotImplementedError
+
+    def make_surface(self, t: Array, k: Array) -> VolSurface:
+        raise NotImplementedError
 
 
 @runtime_checkable
-class CalibrationFn(Protocol):
+class Solver(Protocol):
+    def __call__(
+        self,
+        fun: Callable[[Array], float],
+        x0: Array,
+        kwargs=None,
+    ) -> tuple[Array, Array]: ...
+
+
+@runtime_checkable
+class Calibrate(Protocol):
     """Defines a standard interface for a pure calibration function.
 
     This protocol acts as a contract for any function that performs volatility
@@ -133,7 +216,7 @@ class CalibrationFn(Protocol):
     Args:
         chain (OptionChain): The market data for options.
         mkt (VolCalibrationContext): The market context (spot, rates, etc.).
-        config (CalibrationConfig): The configuration for the calibration run,
+        config (CalibrationSettings): The configuration for the calibration run,
             including initial guesses and optimizer settings.
 
     Returns:
@@ -147,8 +230,8 @@ class CalibrationFn(Protocol):
         # In a separate implementation file, e.g., black_scholes.py
 
         from phd.src.protocols import (
-            CalibrationFn,
-            CalibrationConfig,
+            Calibrate,
+            CalibrationSettings,
             CalibrationResult,
             OptionChain,
             VolCalibrationContext,
@@ -156,7 +239,7 @@ class CalibrationFn(Protocol):
 
 
         def calibrate_xyz(
-            chain: OptionChain, mkt: VolCalibrationContext, config: CalibrationConfig
+            chain: OptionChain, mkt: VolCalibrationContext, config: CalibrationSettings
         ) -> CalibrationResult:
             # 1. Unpack data and run the core mathematical optimization
             #    (This is where the real work happens)
@@ -171,70 +254,26 @@ class CalibrationFn(Protocol):
     """
 
     def __call__(
-        self, chain: OptionChain, mkt: VolCalibrationContext, config: CalibrationConfig
+        self,
+        chain: OptionChain,
+        mkt: VolCalibrationContext,
+        solver: Solver,
+        settings: CalibrationSettings,
+        kwargs,
     ) -> CalibrationResult: ...
 
 
-class VanillaPricer(ABC):
-    """Pricing models -> can be used both for interpolation and valuation of vanillas."""
-
-    params: Array
-
-    def __call__(self, t, k) -> Array:
-        """Thanks to this we can use an option pricer as interpolator"""
-        raise NotImplementedError
-
-
-@dataclass(frozen=True)
-class EuropeanOption:
-    expiry: Array  # in years
-    strike: Array
-    option_type: Array  # "call" or "put"
-
-
-def make_european_options(t: Array, k: Array, option_type: Literal["call", "put"] = "call") -> EuropeanOption: ...
-
-
-class XyzVanillaPricer(VanillaPricer):
-    params = Array
-
-    """ For example BSM, Heston, Bates, varaince-gamma"""
-
-    def price(self, product, context: ValuationContext) -> Array: ...
-
-    def ivol(self, product, context: VolCalibrationContext, price) -> Array: ...
-
-    def make_interpolator(self, context: ValuationContext) -> Interpolator:
-        t, k = ...
-        products = make_european_options(t, k)  # Create products for grid
-        prices = self.price(products, context)  # Model prices
-        vols = self.ivol(products, context, prices)  # Back out implied vol
-        return vols
-
-    def __call__(self, t, k) -> Array: ...
-
-
-@dataclass(frozen=True)
-class CalibrationConfig:
-    """Configuration for a calibration process."""
-
-    initial_guess: Array
-    optimizer_settings: dict[str, Any](default_factory=dict)
-    # etc.
-
-
-@dataclass(frozen=True)
-class CalibrationResult:
-    """The output of a successful calibration."""
-
-    surface: "VolSurface"
-    calibrated_params: Array
-    fit_error: float | None = None
+# ---------------------------------------------------------------------------------------------------------------------
+# Risk factors protocols and abstract classes
+# ---------------------------------------------------------------------------------------------------------------------
 
 
 @runtime_checkable
 class RiskFactorEncoder(Protocol):
-    """Used to convert a vol surfaces to a reduced set of risk factors (e.g, VG, Melz, PCA factor, functional PCA, Heston parameters)."""
+    """Used to convert a vol surfaces to a reduced set of risk factors.
+
+    For instance, VG, Melz, PCA factor, functional PCA, Heston parameters).
+    """
 
     def encode(self, ivs: VolSurface, **kwargs) -> Array: ...
     def decode(self, rf: Array, **kwargs) -> VolSurface: ...
@@ -262,14 +301,13 @@ class UnivariateProcess(RiskFactorProcess):
     def simulate_std_error(self):
         raise NotImplementedError
 
-    def simulate(self):
+    def simulate(self, x: Array, shift: ShiftType) -> Array:
         raise NotImplementedError
 
 
 class MultivariateProcess(RiskFactorProcess):
     """E.g., Univariate GARCH + Copula. Used in Monte Carlo engines."""
 
-    ...
 
 
 class RiskFactorEngine(ABC):
@@ -286,13 +324,11 @@ class RiskFactorEngine(ABC):
 class HistoricalSimulator(RiskFactorEngine):
     """Simple or filtered, depending on the process."""
 
-    ...
 
 
 class MonteCarloSimulator(RiskFactorEngine):
     """Require a calibrated multivariate multivariate."""
 
-    ...
 
 
 @dataclass(frozen=True)
@@ -304,14 +340,12 @@ class ScenarioContext:
 class Product(ABC):
     """Base class for all products."""
 
-    ...
 
 
 @dataclass(frozen=True)
 class AmericanOption(Product):
     """Equity American Option."""
 
-    ...
 
 
 @dataclass
@@ -334,10 +368,10 @@ def build_strategy(name: str, product: Product, config: dict) -> ValuationStrate
     if name == "full_reval":
         msg = "Full revaluation strategy is not implemented."
         raise NotImplementedError(msg)
-    elif name == "nn":
+    if name == "nn":
         msg = "Neural network valuation strategy is not implemented."
         raise NotImplementedError(msg)
-    elif name == "sens":
+    if name == "sens":
         msg = "Sensitivity-based valuation strategy is not implemented."
         raise NotImplementedError(msg)
 
@@ -345,4 +379,3 @@ def build_strategy(name: str, product: Product, config: dict) -> ValuationStrate
 class VarEngine:
     """Converts scenarios → P/L distribution → risk metric."""
 
-    pass
