@@ -1,11 +1,10 @@
-"""Protocols and data structures for option pricing, volatility surfaces, and risk management.
-"""
+"""Protocols and data structures for option pricing, volatility surfaces, and risk management."""
 
 import datetime as dt
 from abc import ABC
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Optional, Protocol, Sequence, runtime_checkable
 
 import jax.numpy as jnp
 import numpy as np
@@ -92,6 +91,8 @@ class VolCalibrationContext:
 
 @dataclass(frozen=True)
 class ValuationContext:
+    """Market data used in valuation."""
+
     anchor: dt.datetime
     vol_surface: "VolSurface"
     rates: Array
@@ -119,6 +120,22 @@ class EuropeanOption:
     expiry: Array
     strike: Array
     option_type: Array
+
+
+@dataclass(frozen=True)
+class Product(ABC):
+    """Base class for all products."""
+
+
+@dataclass(frozen=True)
+class Position:
+    product: Any
+    quantity: float
+
+
+@dataclass(frozen=True)
+class Portfolio:
+    positions: list[Position]
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -259,7 +276,7 @@ class Calibrate(Protocol):
         mkt: VolCalibrationContext,
         solver: Solver,
         settings: CalibrationSettings,
-        kwargs,
+        kwargs=None,
     ) -> CalibrationResult: ...
 
 
@@ -269,14 +286,14 @@ class Calibrate(Protocol):
 
 
 @runtime_checkable
-class RiskFactorEncoder(Protocol):
+class VolSurfaceEncoder(Protocol):
     """Used to convert a vol surfaces to a reduced set of risk factors.
 
     For instance, VG, Melz, PCA factor, functional PCA, Heston parameters).
     """
 
-    def encode(self, ivs: VolSurface, **kwargs) -> Array: ...
-    def decode(self, rf: Array, **kwargs) -> VolSurface: ...
+    def encode(self, ivs: VolSurface, kwargs: None) -> Array: ...
+    def decode(self, rf: Array, kwargs: None) -> VolSurface: ...
 
 
 @runtime_checkable
@@ -291,72 +308,88 @@ class RiskFactorProcess(ABC):
 
     params: list[Array]  # needs a calibrated model
 
-    def simulate(self, x: Array, shift: ShiftType) -> Array:
+    def simulate(self, dim: tuple[int, int]) -> Array:
+        raise NotImplementedError
+
+    def sample_std_error(self, x: Array) -> Array:
+        """Sample the standard error of the process at x."""
+        raise NotImplementedError
+
+    def actualise(self, x: Array) -> Array:
+        """Scale by the current volatiltiy."""
+        raise NotImplementedError
+
+    def simulate_hist(x: Array) -> Array:
+        """Poduce historical scenarios for the process."""
         raise NotImplementedError
 
 
-class UnivariateProcess(RiskFactorProcess):
-    """E.g., Univariate GARCH on each factor. Used in filtered HS."""
+@runtime_checkable
+class RiskFactorProcessFitter(Protocol):
+    """Protocol for fitting risk factor processes.
 
-    def simulate_std_error(self):
+    Separates fitting logic from process dynamics, following JAX ecosystem style.
+    """
+
+    def fit(self, ts: Array, **kwargs) -> RiskFactorProcess:
+        """Fit a risk factor process to historical data ts."""
+        ...
+
+
+class MultivariateProcess:
+    """E.g., Univariate GARCH + Copula. Used in Monte Carlo engines"""
+
+    marginals: list[RiskFactorProcess]
+    corr: Copula
+
+
+class ScenarioGenerator(Protocol):
+    """Abstract interface for scenario generators."""
+
+    def simulate(self, **kwargs) -> list[VolSurface]:
+        """Simulate scenarios from a base volatility surface.
+
+        Args:
+            **kwargs: Generator-specific parameters (e.g., ts for historical or n_scenarios for Monte Carlo).
+
+        Returns:
+            A list of VolSurface scenarios.
+        """
+        ...
+
+
+@dataclass(frozen=True)
+class VolRiskFactor:
+    key: str
+    encoder: VolSurfaceEncoder
+    shift: ShiftType
+    process: RiskFactorProcess
+
+
+class HistScenarioGenerator(ScenarioGenerator):
+    """Historical scenario generator using filtered historical simulation."""
+
+    def __init__(
+        self,
+        risk_factor: VolRiskFactor,
+    ):
+        # ...existing code...
+        self.rf = risk_factor
+
+    def simulate(self, base: VolSurface, ts: Array[VolSurface], **kwargs) -> list[VolSurface]:
+        """Simulate scenarios based on historical vol surface time series."""
+        latent_hist = self.rf.encoder.encode(ts, **kwargs)
+        shocks = self.rf.process.simulate_hist(latent_hist)
+        base_latent = self.rf.encoder.encode(base, **kwargs)
+        scenarios_latent = base_latent + shocks
+        return [self.rf.encoder.decode(lat, **kwargs) for lat in scenarios_latent]
+
+
+class MonteCarloScenarioGenerator(ScenarioGenerator):
+    """Monte Carlo scenario generator for risk factor processes."""
+
+    def __init__(self):
         raise NotImplementedError
-
-    def simulate(self, x: Array, shift: ShiftType) -> Array:
-        raise NotImplementedError
-
-
-class MultivariateProcess(RiskFactorProcess):
-    """E.g., Univariate GARCH + Copula. Used in Monte Carlo engines."""
-
-
-
-class RiskFactorEngine(ABC):
-    def __init__(self, encoder: RiskFactorEncoder, process: UnivariateProcess, shift: ShiftType):
-        self.encoder = encoder
-        self.shift = shift
-        self.process = process
-
-    def simulate(self, base: Array[VolSurface], *, key, steps, paths) -> Array[VolSurface]:
-        latent = self.process.simulate(self.encoder.encode(base), key, steps, paths)
-        return self.encoder.decode(latent)
-
-
-class HistoricalSimulator(RiskFactorEngine):
-    """Simple or filtered, depending on the process."""
-
-
-
-class MonteCarloSimulator(RiskFactorEngine):
-    """Require a calibrated multivariate multivariate."""
-
-
-
-@dataclass(frozen=True)
-class ScenarioContext:
-    mxt_t0: VolSurface
-
-
-@dataclass(frozen=True)
-class Product(ABC):
-    """Base class for all products."""
-
-
-
-@dataclass(frozen=True)
-class AmericanOption(Product):
-    """Equity American Option."""
-
-
-
-@dataclass
-class Position:
-    product: Any
-    quantity: float
-
-
-@dataclass
-class Portfolio:
-    positions: list[Position]
 
 
 @runtime_checkable
@@ -376,6 +409,57 @@ def build_strategy(name: str, product: Product, config: dict) -> ValuationStrate
         raise NotImplementedError(msg)
 
 
-class VarEngine:
-    """Converts scenarios → P/L distribution → risk metric."""
+class ProxyStrategy(Protocol):
+    def assign_risk_factor(self, name: str) -> dict: ...
 
+
+class VarEngineBase(ABC):
+    """Abstract base class for VaR engines that stores PnL history.
+
+    Attributes:
+        portfolio: The portfolio to analyze.
+        strategy: ValuationStrategy for pricing under scenarios.
+        scenario_generator: ScenarioGenerator for risk-factor scenarios.
+        proxy_assigner: ProxyStrategy for transforming raw risk-factor series.
+        _pnl: Stored PnL array for the last evaluation.
+    """
+
+    def __init__(
+        self,
+        portfolio: Portfolio,
+        valuation_strategy: ValuationStrategy,
+        scenario_generator: ScenarioGenerator,
+        proxy_assigner: ProxyStrategy,
+    ) -> None:
+        """Initialize dependencies and prepare PnL storage."""
+        self.portfolio = portfolio
+        self.scenario_generator = scenario_generator
+        self.proxy_assigner = proxy_assigner
+        self.strategy = valuation_strategy
+        self._pnl: Array | None = None
+
+    def collect_risk_factors(self, context: ValuationContext) -> Array:
+        """Collect and return historical risk-factor data for the portfolio."""
+        raise NotImplementedError
+
+    def simulate_scenarios(self, rf_ts: Array, **kwargs: Any) -> list[VolSurface]:
+        """Simulate risk-factor scenarios using the injected generator."""
+        return self.scenario_generator.simulate(rf_ts, **kwargs)
+
+    def evaluate(self, scenarios: Sequence[VolSurface]) -> Array:
+        """Evaluate portfolio PnL under each scenario and store results."""
+        pnl = jnp.array(
+            [
+                sum(self.strategy.evaluate(pos.product, scenario) * pos.quantity for pos in self.portfolio.positions)
+                for scenario in scenarios
+            ]
+        )
+        self._pnl = pnl
+        return pnl
+
+    def run(self, context: ValuationContext, **generate_kwargs: Any) -> tuple[float, float]:
+        """Execute full VaR pipeline and store PnL."""
+        raw_ts = self.collect_risk_factors(context)
+        proxied_ts = self.proxy_assigner.assign_risk_factor(raw_ts)
+        scenarios = self.simulate_scenarios(proxied_ts, **generate_kwargs)
+        self.evaluate(scenarios)
