@@ -11,42 +11,51 @@ extend-select = ["I"]
 ignore = [
   "COM812",  # Trailing comma missing
   "ANN002",  # Missing type annotation for `*args`
-  "D102"     # Missing docstring in public method
+  "D102",    # Missing docstring in public method
+  "FBT001",  # Bolean type hint in positional argument
+  "FBT002",  # Boolean default value positional argument
+  "ANN204",  # missing-return-type-special-method
+  "D105",    # undocumented-magic-method
+  "RUF003",  # ambiguous-unicode-character-comment
+  "PLR0913", # too-many-arguments
+  "PT018",   # pytest-composite-assertion
+  "N806",    # non-lowercase-variable-in-function
+  "PD101",   # pandas-nunique-constant-series-check
+  "PLR2004", # magic-value-comparison
+  "ANN003",  # missing-type-kwargs
+  "TD003",   # missing-todo-link
+  "FIX002",  # line-contains-todo
+  
+  ####  Temporary ####
+  "D103",    # undocumented-public-function
+  "D107",    # undocumented-public-init
+  "ERA001",  # commented-out-code
+  "D100"     # undocumented-public-module
 ]
 
 # Exclude common directories
-exclude = [
-    ".github",
-    ".venv",
-    "venv",
-    "__pycache__",
-    "build"
-]
+exclude = []
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
 [tool.ruff.lint.isort]
-known-first-party = ["phd"]
+known-first-party = ["vol_risk"]
 
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "phd"
+name = "vol_risk"
 version = "0.0.1"
 description = "Volatility Risk for Risk Managers"
 authors = [{ name = "Marco", email = "marco.colbacchini@gmail.com" }]
 readme = "README.md"
-requires-python = ">=3.11"
-dependencies = []
+requires-python = ">=3.13"
+dependencies = [
+  "numpy>=2.3.4"
+]
 
 [project.optional-dependencies]
-dev = ["pytest", "coverage"]
-
-[tool.setuptools]
-package-dir = { "" = "src" }
-
-[tool.setuptools.packages.find]
-where = ["src"]
+dev = []

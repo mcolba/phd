@@ -29,3 +29,7 @@ Makefile
 .idea/
 .DS_Store
 .ruff_cache/
+.venv/
+
+# === Exclude folders ===
+_temp/
