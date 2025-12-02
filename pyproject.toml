@@ -27,6 +27,7 @@ ignore = [
   "FIX002",  # line-contains-todo
   "N813",    # camelcase-imported-as-lowercase
   "PT009",   # pytest-unittest-assertion
+  "INP001",  # implicit-namespace-package
 
   ####  Temporary ####
   "D103",    # undocumented-public-function
@@ -56,8 +57,20 @@ authors = [{ name = "Marco", email = "marco.colbacchini@gmail.com" }]
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-  "numpy>=2.3.4"
+  "numpy>=2.3.4",
+  "scipy>=1.15.3",
+  "pandas>=2.3.3",
+  "jax>=0.8.0",
+  "matplotlib>=3.10.7",
+  "pandera>=0.26.1",
 ]
 
 [project.optional-dependencies]
-dev = []
+dev = [
+  "QuantLib==1.38",
+  "matplotlib>=3.10.7",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["vol_risk*"]
