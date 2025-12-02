@@ -60,7 +60,7 @@ def build_call_slice(params: RawSVIParams, tau: float, strikes: np.ndarray, le: 
     )
 
 
-def save_dataframe_to_csv(df: pd.DataFrame, lm, path: Path) -> None:
+def save_dataframe_to_csv(df: pd.DataFrame, lm: LinearEquity, path: Path) -> None:
     """Save DataFrame to CSV with custom CBOE-style field names."""
     log.info("Saving DataFrame to %s", path)
     cboe_style_df = pd.DataFrame(
