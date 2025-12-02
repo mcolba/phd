@@ -25,7 +25,9 @@ ignore = [
   "ANN003",  # missing-type-kwargs
   "TD003",   # missing-todo-link
   "FIX002",  # line-contains-todo
-  
+  "N813",    # camelcase-imported-as-lowercase
+  "PT009",   # pytest-unittest-assertion
+
   ####  Temporary ####
   "D103",    # undocumented-public-function
   "D107",    # undocumented-public-init
