@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import QuantLib as ql
 
-output_path = Path(__file__).resolve().parents[2] / "data" / "test" / "heston_p_quantlib.csv"
+output_path = Path(__file__).resolve().parents[2] / "data" / "test" / "heston_prices_quantlib.csv"
 
 valuation_date = ql.Date(25, ql.November, 2025)
 ql.Settings.instance().evaluationDate = valuation_date
@@ -24,7 +24,13 @@ rho = -0.5
 v0 = 0.04
 
 strikes = np.linspace(80.0, 120.0, 5)
-taus = np.array([0.25, 0.5, 1.0, 2.0])
+maturity_date = [
+    valuation_date + ql.Period("1M"),
+    valuation_date + ql.Period("3M"),
+    valuation_date + ql.Period("12M"),
+    valuation_date + ql.Period("24M"),
+]
+year_fraction = np.array([dc.yearFraction(valuation_date, t) for t in maturity_date])
 
 spot_handle = ql.QuoteHandle(ql.SimpleQuote(spot))
 r_curve = ql.FlatForward(valuation_date, r, dc)
@@ -41,10 +47,8 @@ max_evaluations = 1_000_000
 engine = ql.AnalyticHestonEngine(model, rel_tol, max_evaluations)
 
 rows = []
-for tau in taus:
-    maturity_days = max(1, int(round(365 * float(tau))))
-    maturity_date = valuation_date + ql.Period(maturity_days, ql.Days)
-    exercise = ql.EuropeanExercise(maturity_date)
+for tau, t in zip(year_fraction, maturity_date, strict=True):
+    exercise = ql.EuropeanExercise(t)
     for K in strikes:
         payoff = ql.PlainVanillaPayoff(ql.Option.Call, float(K))
         option = ql.VanillaOption(payoff, exercise)
@@ -53,7 +57,7 @@ for tau in taus:
         rows.append(
             {
                 "valuation_date": valuation_date.ISO(),
-                "maturity_date": maturity_date.ISO(),
+                "maturity_date": t.ISO(),
                 "S": float(spot),
                 "K": float(K),
                 "tau": float(tau),

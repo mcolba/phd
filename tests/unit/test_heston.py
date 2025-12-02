@@ -17,7 +17,7 @@ from vol_risk.models.heston import (
 )
 from vol_risk.models.linear import LinearEquityMarket, make_simple_linear_market
 
-DATA_PATH = pathlib.Path(__file__).resolve().parent.parent / "data" / "heston_p_quantlib.csv"
+DATA_PATH = pathlib.Path(__file__).resolve().parent.parent / "data" / "heston_prices_quantlib.csv"
 
 
 class TestHestonModel(unittest.TestCase):
@@ -53,9 +53,10 @@ class TestHestonModel(unittest.TestCase):
 
         abs_error = np.abs(prices - expected_prices)
         rel_error = abs_error / expected_prices
+        idx_small_value = expected_prices < 0.01
 
-        self.assertLessEqual(float(np.max(abs_error)), 1e-2)
-        self.assertLessEqual(float(np.max(rel_error)), 1e-2)
+        self.assertLessEqual(float(np.max(abs_error)), 1e-5)
+        self.assertLessEqual(float(np.max(rel_error[~idx_small_value])), 1e-3)
 
     def test_heston_delta_matches_finite_difference(self) -> None:
         params = HestonParams(
