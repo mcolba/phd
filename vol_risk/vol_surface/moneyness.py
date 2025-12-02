@@ -1,11 +1,11 @@
 from abc import ABC
 from dataclasses import dataclass
-from np.typing import ArrayLike
 
 import numpy as np
+from numpy.typing import ArrayLike
 
-from scripts.synthetic_smiles_w_arbitrage import LinearEquity
 from vol_risk.models.black76 import black76_fwd_delta, black76_fwd_delta_to_strike
+from vol_risk.models.linear import LinearEquity
 
 MONEYNESS_REGISTRY = {
     "base": None,
@@ -37,7 +37,7 @@ class SpotMoneyness(Moneyness):
     def value(self, strike: ArrayLike) -> ArrayLike:
         return strike / self.le.spot
 
-    def invert(self, k) -> ArrayLike:
+    def invert(self, k: ArrayLike) -> ArrayLike:
         return self.le.spot * k
 
 
