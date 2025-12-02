@@ -1,14 +1,14 @@
 """Unit tests for Black model functions from letsberational package."""
 
 import unittest
-import math
+
 from letsberational import black_price, implied_black_vol
 
 
 class TestImpliedVolFunctions(unittest.TestCase):
     """Unit tests for the Black model price and implied volatility functions."""
 
-    def test_black_price_call(self):
+    def test_black_price_call(self) -> None:
         """Test Black price calculation for a call option."""
         forward = 105.0
         strike = 100.0
@@ -21,7 +21,7 @@ class TestImpliedVolFunctions(unittest.TestCase):
 
         self.assertAlmostEqual(price, expected, places=4)
 
-    def test_black_price_put(self):
+    def test_black_price_put(self) -> None:
         """Test Black price calculation for a put option."""
         forward = 105.0
         strike = 100.0
@@ -34,7 +34,7 @@ class TestImpliedVolFunctions(unittest.TestCase):
 
         self.assertAlmostEqual(price, expected, places=4)
 
-    def test_implied_vol_call(self):
+    def test_implied_vol_call(self) -> None:
         """Test that implied volatility calculation retrieves original volatility for call."""
         forward = 105.0
         strike = 100.0
@@ -53,7 +53,7 @@ class TestImpliedVolFunctions(unittest.TestCase):
             implied_sigma, original_sigma, places=6, msg="Implied volatility should match original volatility"
         )
 
-    def test_implied_vol_put(self):
+    def test_implied_vol_put(self) -> None:
         """Test that implied volatility calculation retrieves original volatility for put."""
         forward = 105.0
         strike = 100.0
