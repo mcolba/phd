@@ -1,3 +1,5 @@
+"""Calibration script for Linear Equity Market model using index option data."""
+
 import logging
 from pathlib import Path
 
@@ -144,8 +146,8 @@ for t, sl in spx_chain:
         continue
 
     # Calculate P - C and perform linear regression against strike (K)
-    K = _df["strike"].values.reshape(-1, 1)
-    y = (_df["g_mid"]).values
+    K = _df["strike"].to_numpy().reshape(-1, 1)
+    y = (_df["g_mid"]).to_numpy()
 
     # Fit linear regression: diff = alpha + beta * K
     reg = LinearRegression().fit(-K, y)
