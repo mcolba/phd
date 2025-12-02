@@ -28,7 +28,7 @@ class LinearEquityMarket:
 
     def zero_dvd_yield(self, tau: ArrayLike) -> ArrayLike:
         """Calculate the zero dividend yield."""
-        return -np.log(self.cont_dvd_curve(tau)) / tau
+        return self.cont_dvd_curve(tau)
 
 
 def make_raw_disc_curve(
@@ -86,5 +86,5 @@ def make_simple_linear_market(s: float = 100.0, r: float = 0, q: float = 0) -> L
     return LinearEquityMarket(
         spot=s,
         disc_curve=lambda tau: np.exp(-r * tau),
-        cont_dvd_curve=lambda tau: q,
+        cont_dvd_curve=lambda _: q,
     )
