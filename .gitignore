@@ -10,6 +10,7 @@ dist/
 *.so
 *.pyd
 *.dll
+*.pdb
 *.dylib
 *.o
 *.obj
