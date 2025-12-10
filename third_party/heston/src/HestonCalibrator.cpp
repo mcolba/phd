@@ -38,7 +38,7 @@
 #include <ctime>
 #include <levmar.h>
 #include <iomanip>
-
+#include "HestonCalibrator.h"
 using namespace std;
 
 // Gauss-Legendre setup: you may choose from one of the following scheme:
@@ -55,12 +55,12 @@ static double w64[32] = {0.0486909570091397203833654,0.0485754674415034269347991
 //static double x128[64] = {0.0122236989606157641980521,0.0366637909687334933302153,0.0610819696041395681037870,0.0854636405045154986364980,0.1097942311276437466729747,0.1340591994611877851175753,0.1582440427142249339974755,0.1823343059853371824103826,0.2063155909020792171540580,0.2301735642266599864109866,0.2538939664226943208556180,0.2774626201779044028062316,0.3008654388776772026671541,0.3240884350244133751832523,0.3471177285976355084261628,0.3699395553498590266165917,0.3925402750332674427356482,0.4149063795522750154922739,0.4370245010371041629370429,0.4588814198335521954490891,0.4804640724041720258582757,0.5017595591361444642896063,0.5227551520511754784539479,0.5434383024128103634441936,0.5637966482266180839144308,0.5838180216287630895500389,0.6034904561585486242035732,0.6228021939105849107615396,0.6417416925623075571535249,0.6602976322726460521059468,0.6784589224477192593677557,0.6962147083695143323850866,0.7135543776835874133438599,0.7304675667419088064717369,0.7469441667970619811698824,0.7629743300440947227797691,0.7785484755064119668504941,0.7936572947621932902433329,0.8082917575079136601196422,0.8224431169556438424645942,0.8361029150609068471168753,0.8492629875779689691636001,0.8619154689395484605906323,0.8740527969580317986954180,0.8856677173453972174082924,0.8967532880491581843864474,0.9073028834017568139214859,0.9173101980809605370364836,0.9267692508789478433346245,0.9356743882779163757831268,0.9440202878302201821211114,0.9518019613412643862177963,0.9590147578536999280989185,0.9656543664319652686458290,0.9717168187471365809043384,0.9771984914639073871653744,0.9820961084357185360247656,0.9864067427245862088712355,0.9901278184917343833379303,0.9932571129002129353034372,0.9957927585349811868641612,0.9977332486255140198821574,0.9990774599773758950119878,0.9998248879471319144736081};
 //static double w128[64] = {0.0244461801962625182113259,0.0244315690978500450548486,0.0244023556338495820932980,0.0243585572646906258532685,0.0243002001679718653234426,0.0242273192228152481200933,0.0241399579890192849977167,0.0240381686810240526375873,0.0239220121367034556724504,0.0237915577810034006387807,0.0236468835844476151436514,0.0234880760165359131530253,0.0233152299940627601224157,0.0231284488243870278792979,0.0229278441436868469204110,0.0227135358502364613097126,0.0224856520327449668718246,0.0222443288937997651046291,0.0219897106684604914341221,0.0217219495380520753752610,0.0214412055392084601371119,0.0211476464682213485370195,0.0208414477807511491135839,0.0205227924869600694322850,0.0201918710421300411806732,0.0198488812328308622199444,0.0194940280587066028230219,0.0191275236099509454865185,0.0187495869405447086509195,0.0183604439373313432212893,0.0179603271850086859401969,0.0175494758271177046487069,0.0171281354231113768306810,0.0166965578015892045890915,0.0162550009097851870516575,0.0158037286593993468589656,0.0153430107688651440859909,0.0148731226021473142523855,0.0143943450041668461768239,0.0139069641329519852442880,0.0134112712886163323144890,0.0129075627392673472204428,0.0123961395439509229688217,0.0118773073727402795758911,0.0113513763240804166932817,0.0108186607395030762476596,0.0102794790158321571332153,0.0097341534150068058635483,0.0091830098716608743344787,0.0086263777986167497049788,0.0080645898904860579729286,0.0074979819256347286876720,0.0069268925668988135634267,0.0063516631617071887872143,0.0057726375428656985893346,0.0051901618326763302050708,0.0046045842567029551182905,0.0040162549837386423131943,0.0034255260409102157743378,0.0028327514714579910952857,0.0022382884309626187436221,0.0016425030186690295387909,0.0010458126793403487793129,0.0004493809602920903763943};
 
-typedef struct tagGLAW{
-    int numgrid; // # of nodes
-    double* u; // nodes
-    double* w; // weights
-} GLAW;
-static GLAW glaw = {64, x64, w64};
+// typedef struct tagGLAW{
+//     int numgrid; // # of nodes
+//     double* u; // nodes
+//     double* w; // weights
+// } GLAW; \\ moved to HestonCalibrator.h (Marco)
+GLAW glaw = {64, x64, w64}; // made non-static (Marco)
 //static GLAW glaw = {96, x96, w96};
 //static GLAW glaw = {128, x128, w128};
 
@@ -68,7 +68,7 @@ complex<double> one(1.0, 0.0), zero(0.0, 0.0), two(2.0, 0.0), i(0.0, 1.0);
 const double pi = 4.0*atan(1.0), lb = 0.0, ub = 200, Q = 0.5*(ub - lb), P = 0.5*(ub + lb);
 
 // market parameters: you may change the number of observations by modifying the size of T and K
-struct mktpara{
+struct mktpara_term{
     double S;
     double r;
     double T[40];
@@ -76,12 +76,12 @@ struct mktpara{
 };
 
 // integrands for Heston pricer:
-struct tagMN{
-    double M1;
-    double N1;
-    double M2;
-    double N2;
-};
+// struct tagMN{
+//     double M1;
+//     double N1;
+//     double M2;
+//     double N2;
+// }; // moved to HestonCalibrator.h (Marco)
 
 // return integrands (real-valued) for Heston pricer
 tagMN HesIntMN(double u, double a, double b, double c, double rho, double v0,
@@ -185,8 +185,8 @@ void fHes(double *p, double *x, int m, int n, void *data)
     int l;
 
     // retrieve market parameters
-    struct mktpara *dptr;
-    dptr=(struct mktpara *)data;
+    struct mktpara_term *dptr;
+    dptr=(struct mktpara_term *)data;
     double S = dptr->S;
     double r = dptr->r;
 
@@ -232,22 +232,22 @@ void fHes(double *p, double *x, int m, int n, void *data)
 }
 
 // integrands for Jacobian
-struct tagMNJac{
-    double pa1s;
-    double pa2s;
+// struct tagMNJac{
+//     double pa1s;
+//     double pa2s;
 
-    double pb1s;
-    double pb2s;
+//     double pb1s;
+//     double pb2s;
 
-    double pc1s;
-    double pc2s;
+//     double pc1s;
+//     double pc2s;
 
-    double prho1s;
-    double prho2s;
+//     double prho1s;
+//     double prho2s;
 
-    double pv01s;
-    double pv02s;
-};
+//     double pv01s;
+//     double pv02s;
+// }; // moved to HestonCalibrator.h (Marco)
 
 
 // return integrands (real-valued) for Jacobian
@@ -506,8 +506,8 @@ void JacHes(double *p, double *jac, int m, int n, void *data) {
     int l, k;
 
     // retrieve market parameters
-    struct mktpara *dptr;
-    dptr=(struct mktpara *)data;
+    struct mktpara_term *dptr;
+    dptr=(struct mktpara_term *)data;
     double S = dptr->S;
     double r = dptr->r;
 
@@ -572,111 +572,111 @@ void JacHes(double *p, double *jac, int m, int n, void *data) {
     }
 }
 
-int main() {
+// int main() {
 
-    int m = 5;  // # of parameters
-    int n = 40; // # of observations (consistent with the struct mktpara)
+//     int m = 5;  // # of parameters
+//     int n = 40; // # of observations (consistent with the struct mktpara)
 
-    struct mktpara market;
+//     struct mktpara market;
 
-    // array of strikes
-    double karr[] = {
-        0.9371, 0.8603, 0.8112, 0.7760, 0.7470, 0.7216, 0.6699, 0.6137,
-        0.9956, 0.9868, 0.9728, 0.9588, 0.9464, 0.9358, 0.9175, 0.9025,
-        1.0427, 1.0463, 1.0499, 1.0530, 1.0562, 1.0593, 1.0663, 1.0766,
-        1.2287, 1.2399, 1.2485, 1.2659, 1.2646, 1.2715, 1.2859, 1.3046,
-        1.3939, 1.4102, 1.4291, 1.4456, 1.4603, 1.4736, 1.5005, 1.5328};
+//     // array of strikes
+//     double karr[] = {
+//         0.9371, 0.8603, 0.8112, 0.7760, 0.7470, 0.7216, 0.6699, 0.6137,
+//         0.9956, 0.9868, 0.9728, 0.9588, 0.9464, 0.9358, 0.9175, 0.9025,
+//         1.0427, 1.0463, 1.0499, 1.0530, 1.0562, 1.0593, 1.0663, 1.0766,
+//         1.2287, 1.2399, 1.2485, 1.2659, 1.2646, 1.2715, 1.2859, 1.3046,
+//         1.3939, 1.4102, 1.4291, 1.4456, 1.4603, 1.4736, 1.5005, 1.5328};
 
-    // array of expiries
-    double tarr[] = {0.119047619047619, 0.238095238095238,	0.357142857142857, 0.476190476190476,	0.595238095238095, 0.714285714285714, 1.07142857142857, 1.42857142857143,
-        0.119047619047619	,0.238095238095238, 0.357142857142857, 0.476190476190476, 0.595238095238095, 0.714285714285714	,1.07142857142857, 1.42857142857143	,
-        0.119047619047619, 	0.238095238095238,	0.357142857142857,	0.476190476190476,	0.595238095238095,	0.714285714285714,	1.07142857142857,	1.42857142857143,
-        0.119047619047619,	0.238095238095238,	0.357142857142857,	0.476190476190476	,0.595238095238095,	0.714285714285714,	1.07142857142857,	1.42857142857143,
-        0.119047619047619,	0.238095238095238	,0.357142857142857,	0.476190476190476,	0.595238095238095,	0.714285714285714,	1.07142857142857,	1.42857142857143};
+//     // array of expiries
+//     double tarr[] = {0.119047619047619, 0.238095238095238,	0.357142857142857, 0.476190476190476,	0.595238095238095, 0.714285714285714, 1.07142857142857, 1.42857142857143,
+//         0.119047619047619	,0.238095238095238, 0.357142857142857, 0.476190476190476, 0.595238095238095, 0.714285714285714	,1.07142857142857, 1.42857142857143	,
+//         0.119047619047619, 	0.238095238095238,	0.357142857142857,	0.476190476190476,	0.595238095238095,	0.714285714285714,	1.07142857142857,	1.42857142857143,
+//         0.119047619047619,	0.238095238095238,	0.357142857142857,	0.476190476190476	,0.595238095238095,	0.714285714285714,	1.07142857142857,	1.42857142857143,
+//         0.119047619047619,	0.238095238095238	,0.357142857142857,	0.476190476190476,	0.595238095238095,	0.714285714285714,	1.07142857142857,	1.42857142857143};
 
-    // strikes and expiries
-    for (int j=0; j<n; ++j) {
-        market.K[j] = karr[j];
-        market.T[j] = tarr[j];
-    }
+//     // strikes and expiries
+//     for (int j=0; j<n; ++j) {
+//         market.K[j] = karr[j];
+//         market.T[j] = tarr[j];
+//     }
 
-    // spot and interest rate
-    market.S = 1.0;
-    market.r = 0.02;
+//     // spot and interest rate
+//     market.S = 1.0;
+//     market.r = 0.02;
 
-    // you may set up your optimal model parameters here:
-    // set optimal model parameters  | Corresponding model paramater |  Meaning
-    double a = 3.0;               // kappa                           |  mean reversion rate
-    double b = 0.10;              // v_infinity                      |  long term variance
-    double c = 0.25;              // sigma                           |  variance of volatility
-    double rho = -0.8;            // rho                             |  correlation between spot and volatility
-    double v0 = 0.08;             // v0                              |  initial variance
+//     // you may set up your optimal model parameters here:
+//     // set optimal model parameters  | Corresponding model paramater |  Meaning
+//     double a = 3.0;               // kappa                           |  mean reversion rate
+//     double b = 0.10;              // v_infinity                      |  long term variance
+//     double c = 0.25;              // sigma                           |  variance of volatility
+//     double rho = -0.8;            // rho                             |  correlation between spot and volatility
+//     double v0 = 0.08;             // v0                              |  initial variance
 
-    double pstar[5];
-    pstar[0] = a; pstar[1] = b; pstar[2] = c; pstar[3] = rho; pstar[4] = v0;
+//     double pstar[5];
+//     pstar[0] = a; pstar[1] = b; pstar[2] = c; pstar[3] = rho; pstar[4] = v0;
 
-    // compute the market observatoins with pstar
-    double x[40];
-    fHes(pstar, x, m, n, (void *) &market);
+//     // compute the market observatoins with pstar
+//     double x[40];
+//     fHes(pstar, x, m, n, (void *) &market);
 
-    // >>> Enter calibrating routine >>>
-    double start_s = clock();
+//     // >>> Enter calibrating routine >>>
+//     double start_s = clock();
 
-    // algorithm parameters
-    double opts[LM_OPTS_SZ], info[LM_INFO_SZ];
-    opts[0]=LM_INIT_MU;
-    // stopping thresholds for
-    opts[1]=1E-10;       // ||J^T e||_inf
-    opts[2]=1E-10;       // ||Dp||_2
-    opts[3]=1E-10;       // ||e||_2
-    opts[4]= LM_DIFF_DELTA; // finite difference if used
+//     // algorithm parameters
+//     double opts[LM_OPTS_SZ], info[LM_INFO_SZ];
+//     opts[0]=LM_INIT_MU;
+//     // stopping thresholds for
+//     opts[1]=1E-10;       // ||J^T e||_inf
+//     opts[2]=1E-10;       // ||Dp||_2
+//     opts[3]=1E-10;       // ||e||_2
+//     opts[4]= LM_DIFF_DELTA; // finite difference if used
 
-    // you may set up your initial point here:
-    double p[5];
-    p[0] = 1.2000;
-    p[1] = 0.20000;
-    p[2] = 0.3000;
-    p[3] = -0.6000;
-    p[4] = 0.2000;
+//     // you may set up your initial point here:
+//     double p[5];
+//     p[0] = 1.2000;
+//     p[1] = 0.20000;
+//     p[2] = 0.3000;
+//     p[3] = -0.6000;
+//     p[4] = 0.2000;
 
-    cout << "\r-------- -------- -------- Heston Model Calibrator -------- -------- --------"<<endl;
-    cout << "Parameters:" << "\t         kappa"<<"\t     vinf"<< "\t       vov"<< "\t      rho" << "\t     v0"<<endl;
-    cout << "\r Initial point:" << "\t"  << scientific << setprecision(8) << p[0]<< "\t" << p[1]<< "\t"<< p[2]<< "\t"<< p[3]<< "\t"<< p[4] << endl;
-    // Calibrate using analytical gradient
-    dlevmar_der(fHes, JacHes, p, x, m, n, 100, opts, info, NULL, NULL, (void *) &market);
+//     cout << "\r-------- -------- -------- Heston Model Calibrator -------- -------- --------"<<endl;
+//     cout << "Parameters:" << "\t         kappa"<<"\t     vinf"<< "\t       vov"<< "\t      rho" << "\t     v0"<<endl;
+//     cout << "\r Initial point:" << "\t"  << scientific << setprecision(8) << p[0]<< "\t" << p[1]<< "\t"<< p[2]<< "\t"<< p[3]<< "\t"<< p[4] << endl;
+//     // Calibrate using analytical gradient
+//     dlevmar_der(fHes, JacHes, p, x, m, n, 100, opts, info, NULL, NULL, (void *) &market);
 
-    double stop_s = clock();
+//     double stop_s = clock();
 
-    cout << "Optimum found:" << scientific << setprecision(8) << "\t"<< p[0]<< "\t" << p[1]<< "\t"<< p[2]<< "\t"<< p[3]<< "\t"<< p[4] << endl;
-    cout << "Real optimum:" << "\t" << pstar[0]<<"\t"<< pstar[1]<< "\t"<< pstar[2]<< "\t"<< pstar[3]<< "\t"<< pstar[4] << endl;
+//     cout << "Optimum found:" << scientific << setprecision(8) << "\t"<< p[0]<< "\t" << p[1]<< "\t"<< p[2]<< "\t"<< p[3]<< "\t"<< p[4] << endl;
+//     cout << "Real optimum:" << "\t" << pstar[0]<<"\t"<< pstar[1]<< "\t"<< pstar[2]<< "\t"<< pstar[3]<< "\t"<< pstar[4] << endl;
 
-    if (int(info[6]) == 6) {
-        cout << "\r Solved: stopped by small ||e||_2 = "<< info[1] << " < " << opts[3]<< endl;
-    } else if (int(info[6]) == 1) {
-        cout << "\r Solved: stopped by small gradient J^T e = " << info[2] << " < " << opts[1]<< endl;
-    } else if (int(info[6]) == 2) {
-        cout << "\r Solved: stopped by small change Dp = " << info[3] << " < " << opts[2]<< endl;
-    } else if (int(info[6]) == 3) {
-        cout << "\r Unsolved: stopped by itmax " << endl;
-    } else if (int(info[6]) == 4) {
-        cout << "\r Unsolved: singular matrix. Restart from current p with increased mu"<< endl;
-    } else if (int(info[6]) == 5) {
-        cout << "\r Unsolved: no further error reduction is possible. Restart with increased mu"<< endl;
-    } else if (int(info[6]) == 7) {
-        cout << "\r Unsolved: stopped by invalid values, user error"<< endl;
-    }
+//     if (int(info[6]) == 6) {
+//         cout << "\r Solved: stopped by small ||e||_2 = "<< info[1] << " < " << opts[3]<< endl;
+//     } else if (int(info[6]) == 1) {
+//         cout << "\r Solved: stopped by small gradient J^T e = " << info[2] << " < " << opts[1]<< endl;
+//     } else if (int(info[6]) == 2) {
+//         cout << "\r Solved: stopped by small change Dp = " << info[3] << " < " << opts[2]<< endl;
+//     } else if (int(info[6]) == 3) {
+//         cout << "\r Unsolved: stopped by itmax " << endl;
+//     } else if (int(info[6]) == 4) {
+//         cout << "\r Unsolved: singular matrix. Restart from current p with increased mu"<< endl;
+//     } else if (int(info[6]) == 5) {
+//         cout << "\r Unsolved: no further error reduction is possible. Restart with increased mu"<< endl;
+//     } else if (int(info[6]) == 7) {
+//         cout << "\r Unsolved: stopped by invalid values, user error"<< endl;
+//     }
 
-    cout << "\r-------- -------- -------- Computational cost -------- -------- --------"<<endl;
-    cout << "\r          Time cost: "<< double(stop_s - start_s) /CLOCKS_PER_SEC << " seconds "<<endl;
-    cout << "         Iterations: " << int(info[5]) << endl;
-    cout << "         pv  Evalue: " << int(info[7]) << endl;
-    cout << "         Jac Evalue: "<< int(info[8]) << endl;
-    cout << "# of lin sys solved: " << int(info[9])<< endl; //The attempts to reduce error
-    cout << "\r-------- -------- -------- Residuals -------- -------- --------"<<endl;
-    cout << " \r            ||e0||_2: " << info[0] << endl;
-    cout << "           ||e*||_2: " << info[1]<<endl;
-    cout << "          ||J'e||_inf: " << info[2]<<endl;
-    cout << "           ||Dp||_2: " << info[3]<<endl;
+//     cout << "\r-------- -------- -------- Computational cost -------- -------- --------"<<endl;
+//     cout << "\r          Time cost: "<< double(stop_s - start_s) /CLOCKS_PER_SEC << " seconds "<<endl;
+//     cout << "         Iterations: " << int(info[5]) << endl;
+//     cout << "         pv  Evalue: " << int(info[7]) << endl;
+//     cout << "         Jac Evalue: "<< int(info[8]) << endl;
+//     cout << "# of lin sys solved: " << int(info[9])<< endl; //The attempts to reduce error
+//     cout << "\r-------- -------- -------- Residuals -------- -------- --------"<<endl;
+//     cout << " \r            ||e0||_2: " << info[0] << endl;
+//     cout << "           ||e*||_2: " << info[1]<<endl;
+//     cout << "          ||J'e||_inf: " << info[2]<<endl;
+//     cout << "           ||Dp||_2: " << info[3]<<endl;
 
-    return 0;
-} // The End
+//     return 0;
+// } // The End

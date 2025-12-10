@@ -4,26 +4,82 @@ project(heston LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
-file(GLOB_RECURSE HESTON_SOURCES src/*.cpp src/*.cxx src/*.cc)
-add_library(heston SHARED ${HESTON_SOURCES})
-target_compile_definitions(heston PRIVATE BUILDING_HESTON_DLL)
+# User-configurable options
+option(USE_MKL "Use Intel MKL instead of CLAPACK" ON)
+if(USE_MKL) 
+    file(TO_CMAKE_PATH "$ENV{MKLROOT}" LAPACK_DIR_DEFAULT)
+else()
+    file(TO_CMAKE_PATH "$ENV{DEV}/cpp/clapack-3.2.1" LAPACK_DIR_DEFAULT)
+endif()
+
+file(TO_CMAKE_PATH "$ENV{DEV}/cpp/eigen-5.0.0" EIGEN_DIR_DEFAULT)
+file(TO_CMAKE_PATH "$ENV{DEV}/cpp/levmar-2.6" LEVMAR_DIR_DEFAULT)
+
+# Set default paths (can be overridden by user using -D{VAR}=...)
+set(EIGEN_DIR "${EIGEN_DIR_DEFAULT}" CACHE PATH "Path to Eigen library")
+set(LEVMAR_DIR "${LEVMAR_DIR_DEFAULT}" CACHE PATH "Path to levmar library")
+set(LAPACK_DIR "${LAPACK_DIR_DEFAULT}" CACHE PATH "Path to LAPACK/MKL library")
+
+# Check existence
+if(NOT EXISTS "${EIGEN_DIR}")
+    message(FATAL_ERROR "EIGEN_DIR not found: ${EIGEN_DIR}")
+endif()
+
+if(NOT EXISTS "${LEVMAR_DIR}")
+    message(FATAL_ERROR "LEVMAR_DIR not found: ${LEVMAR_DIR}")
+endif()
+
+if(NOT EXISTS "${LAPACK_DIR}")
+    message(FATAL_ERROR "LAPACK_DIR not found: ${LAPACK_DIR}")
+endif()
+
+add_library(heston SHARED
+    src/Bindings.cpp
+    src/HestonTermStructure.cpp
+    src/HestonCalibrator.cpp
+)
+
 
 # Includes
 target_include_directories(
     heston PRIVATE
-    "C:/dev/src/eigen-5.0.0"
-    "C:/dev/src/levmar-2.6"
-    "C:/Program Files (x86)/Intel/oneAPI/mkl/latest/include"
+    ${EIGEN_DIR}
+    ${LEVMAR_DIR}/src
 )
 
-# Link libraries
-target_link_libraries(
-    heston PRIVATE
-    "C:/dev/build/levmar-2.6/Release/levmar.lib"
-    "C:/Program Files (x86)/Intel/oneAPI/mkl/2025.2/lib/mkl_intel_lp64.lib"
-    "C:/Program Files (x86)/Intel/oneAPI/mkl/2025.2/lib/mkl_sequential.lib"
-    "C:/Program Files (x86)/Intel/oneAPI/mkl/2025.2/lib/mkl_core.lib"
-)
+# Link levmar
+find_library(LEVMAR_LIB levmar PATHS ${LEVMAR_DIR}/build/Release REQUIRED)
+target_link_libraries(heston PRIVATE ${LEVMAR_LIB})
+
+# Configure LAPACK backend
+if(USE_MKL)
+
+    message(STATUS "Using Intel MKL for LAPACK/BLAS")
+    target_include_directories(heston PRIVATE ${LAPACK_DIR}/include)
+    
+    find_library(MKL_INTEL_LIB mkl_intel_lp64 PATHS ${LAPACK_DIR}/lib REQUIRED)
+    find_library(MKL_SEQUENTIAL_LIB mkl_sequential PATHS ${LAPACK_DIR}/lib REQUIRED)
+    find_library(MKL_CORE_LIB mkl_core PATHS ${LAPACK_DIR}/lib REQUIRED)
+    
+    target_link_libraries(heston PRIVATE 
+        ${MKL_INTEL_LIB}
+        ${MKL_SEQUENTIAL_LIB}
+        ${MKL_CORE_LIB}
+    )
+else()
+    message(STATUS "Using CLAPACK for LAPACK/BLAS")
+    target_include_directories(heston PRIVATE ${LAPACK_DIR}/include)
+    
+    find_library(BLAS_LIB blas PATHS ${LAPACK_DIR}/lib REQUIRED)
+    find_library(LAPACK_LIB lapack PATHS ${LAPACK_DIR}/lib REQUIRED)
+    find_library(F2C_LIB f2c libf2c PATHS ${LAPACK_DIR}/lib REQUIRED)
+    
+    target_link_libraries(heston PRIVATE 
+        ${LAPACK_LIB}
+        ${BLAS_LIB}
+        ${F2C_LIB}
+    )
+endif()
 
 # Outputs
 set_target_properties(heston PROPERTIES
@@ -32,5 +88,3 @@ set_target_properties(heston PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
-
-message(STATUS "Configured heston shared library.")

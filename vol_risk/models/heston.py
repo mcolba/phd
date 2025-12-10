@@ -59,7 +59,6 @@ lib.hestonCalibrator.argtypes = [
     np.ctypeslib.ndpointer(dtype=np.float64, ndim=1, flags="C_CONTIGUOUS"),  # statistics
     ct.POINTER(ct.c_int),  # n
     ct.POINTER(ct.c_int),  # m
-    ct.POINTER(ct.c_bool),  # print
 ]
 
 # All exports return void
@@ -249,7 +248,7 @@ def heston_calibrator(
     n_c = ct.c_int(n)
     m_c = ct.c_int(5)
 
-    lib.hestonCalibrator(disc_fwd, r, bK, bT, bp, params_arr, stats, ct.byref(n_c), ct.byref(m_c), ct.c_bool(False))
+    lib.hestonCalibrator(disc_fwd, r, bK, bT, bp, params_arr, stats, ct.byref(n_c), ct.byref(m_c))
 
     # Extract calibrated parameters
     par_opt = HestonParams(
