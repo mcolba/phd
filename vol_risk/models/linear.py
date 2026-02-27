@@ -8,7 +8,7 @@ from numpy.typing import ArrayLike
 from scipy.interpolate import interp1d
 from sklearn.linear_model import LinearRegression
 
-from vol_risk.protocols import OptionChain
+from vol_risk.calibration.data.option_chain import OptionChain
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +145,7 @@ def put_call_df(opt: OptionChain) -> pd.DataFrame:
     )
 
 
-def calib_linear_equity_market(opt: OptionChain, axes=False) -> tuple[LinearEquityMarket, dict]:
+def calib_linear_equity_market(opt: OptionChain, axes=None) -> tuple[LinearEquityMarket, dict]:
     """Calibrate a linear equity market model to an option chain.
 
     The put-call parity is used to extract implied interest rates (r) and income yields (q) via linear regression:
@@ -199,7 +199,12 @@ def calib_linear_equity_market(opt: OptionChain, axes=False) -> tuple[LinearEqui
             axes[i].plot(moneyness, fitted, color="orange")
             axes[i].fill_between(moneyness, pc_df["g_min"], pc_df["g_max"], color="lightgray", alpha=0.5)
             axes[i].scatter(moneyness, y, color="blue", s=20, label="C-P")
-            axes[i].text(0.1, 0.9, f"T={t.date()}, τ= {sl.tau[0]:.2f}", transform=axes[i].transAxes)
+            axes[i].text(
+                0.05,
+                0.05,
+                f"T={t.date()} (τ= {sl.tau[0]:.2f})",
+                transform=axes[i].transAxes,
+            )
 
         # Append results
         tau[i] = sl.tau[0]

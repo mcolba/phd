@@ -32,7 +32,7 @@ def black76_price(
 
     Returns: Contract price
     """
-    df, f, k, t, sigma, is_call = map(np.asarray, (df, f, k, t, sigma, is_call))
+    df, f, k, t, sigma, is_call = map(np.atleast_1d, (df, f, k, t, sigma, is_call))
     sign = np.array([1.0 if x else -1.0 for x in is_call])
 
     d1 = (np.log(f / k) + (sigma**2 / 2) * t) / (sigma * np.sqrt(t))
@@ -49,7 +49,7 @@ def black76_vega(
     sigma: ArrayLike,
 ) -> ArrayLike:
     """Calculate the Black-76 vega for european options."""
-    df, f, k, t, sigma = map(np.asarray, (df, f, k, t, sigma))
+    df, f, k, t, sigma = map(np.atleast_1d, (df, f, k, t, sigma))
 
     d1 = (np.log(f / k) + (sigma**2 / 2) * t) / (sigma * np.sqrt(t))
     return df * f * _gaussian_density(d1) * np.sqrt(t)
@@ -64,7 +64,7 @@ def black76_fwd_delta(
     is_call: ArrayLike,
 ) -> ArrayLike:
     """Calculate the Black-76 delta for European options."""
-    f, k, t, r, sigma, is_call = map(np.asarray, (f, k, t, r, sigma, is_call))
+    f, k, t, r, sigma, is_call = map(np.atleast_1d, (f, k, t, r, sigma, is_call))
 
     d1 = (np.log(f / k) + 0.5 * sigma**2 * t) / (sigma * np.sqrt(t))
     df = np.exp(-r * t)
@@ -81,7 +81,7 @@ def black76_fwd_delta_to_strike(
     is_call: ArrayLike,
 ) -> ArrayLike:
     """Calculate the Black-76 delta for European options."""
-    f, t, r, sigma, is_call = map(np.asarray, (f, t, r, sigma, is_call))
+    f, t, r, sigma, is_call = map(np.atleast_1d, (f, t, r, sigma, is_call))
 
     df = np.exp(-r * t)
     total_vol = sigma * np.sqrt(t)
@@ -181,6 +181,28 @@ def bsm_spot_delta(
     return adj * black76_fwd_delta(
         f=fwd,
         k=k,
+        t=t,
+        r=r,
+        sigma=sigma,
+        is_call=is_call,
+    )
+
+
+def bsm_spot_delta_to_strike(
+    delta: ArrayLike,
+    s: ArrayLike,
+    t: ArrayLike,
+    sigma: ArrayLike,
+    r: ArrayLike,
+    q: ArrayLike,
+    is_call: ArrayLike,
+) -> ArrayLike:
+    """Black-Scholes-Merton price using Black-76 formula."""
+    adj = np.exp((r - q) * t)
+    fwd = s * np.exp((r - q) * t)
+    return (1 / adj) * black76_fwd_delta_to_strike(
+        delta=delta,
+        f=fwd,
         t=t,
         r=r,
         sigma=sigma,

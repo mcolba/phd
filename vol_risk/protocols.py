@@ -1,14 +1,13 @@
 """Protocols and data structures for option pricing, volatility surfaces, and risk management."""
 
 import datetime as dt
-from abc import ABC, abstractmethod
-from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
+from abc import ABC
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 import jax.numpy as jnp
 import numpy as np
-import pandas as pd
 import pandera as pa
 from pandera.pandas import Check, Column, DataFrameSchema
 
@@ -33,28 +32,6 @@ class Interpolator(Protocol):
 
 Curve = tuple[Array, Interpolator]
 
-
-option_chain_schema = DataFrameSchema(
-    columns={
-        "anchor": Column(pa.DateTime, required=True),
-        "strike": Column(float, Check.ge(0), required=True),
-        "expiry": Column(pa.DateTime, required=True),
-        "bid": Column(float, required=True),
-        "ask": Column(float, required=True),
-        "volume": Column(int, required=True),
-        "spot": Column(float, required=True),
-        "option_type": Column(str, Check.isin(["C", "P"]), required=True),
-    },
-    checks=[
-        Check(lambda df: df["expiry"] >= df["anchor"], error="expiry must be >= anchor"),
-        Check(lambda df: df["spot"].nunique() == 1, error="all spot values must be the same"),
-    ],
-    unique=["strike", "expiry", "option_type"],
-    coerce=True,
-    strict=False,  # allows extra columns
-)
-
-
 @runtime_checkable
 class DayCountCalendar(Protocol):
     """Protocol for computing year-fraction between two dates."""
@@ -63,84 +40,61 @@ class DayCountCalendar(Protocol):
         raise NotImplementedError
 
 
-class Actual365Fixed(DayCountCalendar):
-    """Actual/365 fixed day count convention."""
+@runtime_checkable
+class OptionChainLike(Protocol):
+    """Read-only option chain interface.
 
-    @abstractmethod
-    def year_fraction(start: pd.Series, end: pd.Series) -> pd.Series:
-        return (end - start).dt.days / 365.0
+    This matches the current `vol_risk.data.option_chain.OptionChain` API while
+    allowing alternative backends (Arrow/JAX/etc.) to implement the same shape.
+    """
 
-
-@dataclass(frozen=True)
-class OptionChain:
-    """Option chain data."""
-
-    _df: pd.DataFrame
-    _calendar: DayCountCalendar
-
-    def __post_init__(self):
-        object.__setattr__(
-            self,
-            "_df",
-            (
-                option_chain_schema.validate(self._df).sort_values(
-                    ["expiry", "strike", "option_type"], ignore_index=True
-                )
-            ),
-        )
-
-    def __iter__(self):
-        return self._group_by_expiry()
+    def __iter__(self) -> Iterator[tuple[dt.datetime, "OptionChainLike"]]:
+        """Iterate by expiry, yielding (expiry, slice)."""
+        ...
 
     def __getitem__(self, column: str) -> Array:
-        """Get a column as an immutable array."""
-        try:
-            return self._to_array(self._df[column])
-        except KeyError as e:
-            msg = f"Column {column!r} not found in OptionChain."
-            raise KeyError(msg) from e
-
-    def _to_array(self, x: pd.Series) -> Array:
-        arr = x.to_numpy(copy=False)
-        arr.flags.writeable = False
-        return arr
-
-    @property
-    def df(self) -> pd.DataFrame:
-        """Return a copy of the underlying DataFrame."""
-        return self._df.copy()
+        """Column access (backend-defined semantics)."""
+        ...
 
     @property
     def spot(self) -> float:
-        """Return the unique spots in the chain."""
-        return float(self._df["spot"].iloc[0])
+        """Spot price S (unique within the chain)."""
+        ...
 
     @property
     def k(self) -> Array:
-        """Return the unique strikes in the chain."""
-        return self._to_array(self._df["strike"])
+        """Strike array K."""
+        ...
+
+    @property
+    def expiry(self) -> Array:
+        """Expiry timestamps."""
+        ...
 
     @property
     def tau(self) -> Array:
-        """Calculate time to expiry in years based."""
-        year_fraction = self._calendar.year_fraction(self._df["anchor"], self._df["expiry"])
-        return self._to_array(year_fraction)
+        """Time-to-maturity in years (Actual/365 fixed by convention)."""
+        ...
 
     @property
     def mid(self) -> Array:
-        """Return the mid prices of options in the chain."""
-        mid = (self._df["bid"] + self._df["ask"]) / 2.0
-        return self._to_array(mid)
+        """Mid prices (typically (bid + ask) / 2)."""
+        ...
 
     @property
     def option_type(self) -> Array:
-        """Return the option types in the chain."""
-        return self._to_array(self._df["option_type"])
+        """Option type codes (e.g., 'C'/'P')."""
+        ...
 
-    def _group_by_expiry(self) -> Generator[tuple[dt.datetime, "OptionChain"], None, None]:
-        """Yield (expiry, OptionChain) pairs grouped by expiry date."""
-        for expiry, group_df in self._df.groupby("expiry"):
-            yield expiry, OptionChain(group_df.copy(), self._calendar)
+
+@runtime_checkable
+class OptionSliceLike(OptionChainLike, Protocol):
+    """Single-expiry option chain slice."""
+
+    @property
+    def slice_expiry(self) -> dt.datetime:
+        """The unique expiry of the slice."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -155,7 +109,7 @@ class LinearMarketData:
 class OptionMarketData:
     """Option chain data."""
 
-    chain: OptionChain
+    chain: OptionChainLike
     lm: LinearMarketData
 
 
@@ -374,7 +328,7 @@ class Calibrate(Protocol):
 
     def __call__(
         self,
-        chain: OptionChain,
+        chain: OptionChainLike,
         mkt: LinearMarketData,
         solver: Solver,
         settings: CalibrationSettings,

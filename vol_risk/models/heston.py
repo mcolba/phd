@@ -163,7 +163,7 @@ def heston_delta(
 
     r = el.zero_rate(bT)
     disc_fwd = el.fwd(bT) * el.disc_curve(bT)
-    q = el.cont_dvd_curve(bT)
+    q = el.cont_carry_curve(bT)
 
     disc_fwd, r, q, bK, bT = [as_1d_c_array(x, size=n) for x in [disc_fwd, r, q, bK, bT]]
 

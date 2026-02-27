@@ -47,7 +47,6 @@ def make_ravel_param(
 
         def decode(free_params: list, *_: tuple) -> ModelParams:
             return params_cls(*free_params)
-
     else:
         encode, decode = transform
 
