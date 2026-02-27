@@ -28,12 +28,14 @@ ignore = [
   "N813",    # camelcase-imported-as-lowercase
   "PT009",   # pytest-unittest-assertion
   "INP001",  # implicit-namespace-package
+  "TRY003",  # raise-vanilla-args
 
   ####  Temporary ####
   "D103",    # undocumented-public-function
   "D107",    # undocumented-public-init
   "ERA001",  # commented-out-code
-  "D100"     # undocumented-public-module
+  "D100",    # undocumented-public-module
+  "F401",    # unused-import
 ]
 
 # Exclude common directories
@@ -48,14 +50,13 @@ known-first-party = ["vol_risk"]
 # BUILD-TIME: Tools to compile C++ and create the package
 [build-system]
 requires = [
-  "setuptools>=61.0",  # Package builder
+  "setuptools>=80.0",  # Package builder
   "wheel",             # Wheel format support
   "cmake>=3.18",       # Compile C++ code
   "pybind11>=2.11.0",  # Generate Python bindings for C++
 ]
 build-backend = "setuptools.build_meta"
 
-# RUNTIME: Libraries your package needs to work
 [project]
 name = "vol_risk"
 version = "0.0.1"

@@ -109,6 +109,7 @@ def mixed_log_norm_call(
 
 def make_full_encoder(tau: float, method: str = "simplex") -> tuple:
     """Creates a bijection for log-normal mixture calibration parameters."""
+    tau = float(tau)
 
     def encode(params: LogNormMixParams) -> tuple:
         w, mu, sigma = params.w, params.mu, params.sigma
@@ -149,7 +150,7 @@ def make_full_encoder(tau: float, method: str = "simplex") -> tuple:
                 msg = "Invalid parameters: remaining forward mass <= 0. Use simplex method instead."
                 raise ValueError(msg)
             mu_n = np.log((1 - partial_sum) / w[-1]) / tau
-            mu = np.concatenate([x1, np.array(mu_n)])
+            mu = np.append(x1, mu_n)
         else:
             msg = f"Unsupported bijection method: {method!r}. Use 'simplex' or 'manual'."
             raise ValueError(msg)
@@ -161,6 +162,7 @@ def make_full_encoder(tau: float, method: str = "simplex") -> tuple:
 
 def make_full_encoder_totvar(tau: float, method: str = "simplex") -> tuple:
     """Creates a bijection for log-normal mixture calibration parameters with additive total variance."""
+    tau = float(tau)
 
     def encode(params: LogNormMixParams) -> tuple:
         w, mu, sigma = params.w, params.mu, params.sigma
@@ -208,7 +210,7 @@ def make_full_encoder_totvar(tau: float, method: str = "simplex") -> tuple:
                 msg = "Invalid parameters: remaining forward mass <= 0. Use simplex method instead."
                 raise ValueError(msg)
             mu_n = np.log((1 - partial_sum) / w[-1]) / tau
-            mu = np.concatenate([x1, np.array(mu_n)])
+            mu = np.append(x1, mu_n)
         else:
             msg = f"Unsupported bijection method: {method!r}. Use 'simplex' or 'manual'."
             raise ValueError(msg)
@@ -251,6 +253,11 @@ BIJECTION_METHODS = {
     "simplex": lambda x: make_full_encoder(x, method="simplex"),
     "totvar": lambda x: make_full_encoder_totvar(x, method="manual"),
     "totvar_simplex": lambda x: make_full_encoder_totvar(x, method="simplex"),
+}
+
+BIJECTION_FALLBACK = {
+    "totvar": "base",
+    "totvar_simplex": "simplex",
 }
 
 BOUNDS_METHODS = {
@@ -384,7 +391,7 @@ def calib_mixture_smile(
 
     min_vol = 0.0 if "totvar" in transform_method else 0.05
 
-    encoder = BIJECTION_METHODS[transform_method](tau)
+    encoder = BIJECTION_METHODS[transform_method](float(tau))
     x0, unravel = make_ravel_param(p0, encoder, check_unravel=False)
 
     bounds_type = "reduced" if transform_method == "reduced" else "full"
@@ -519,7 +526,8 @@ def calib_mixture_ivs(
         fwd = float(mkt.fwd(tau_vec)[0])
 
         if len(np.unique(opt_slice.k)) != len(opt_slice.k):
-            raise ValueError("Duplicate strikes present in option slice")
+            msg = f"Duplicate strikes found in option slice for tau={tau_val}."
+            raise ValueError(msg)
 
         if lw_type is None or lw_type == "uniform":
             loss_weights = np.ones_like(k_sl, dtype=float)
@@ -540,7 +548,12 @@ def calib_mixture_ivs(
             # p0 = _uninformative_start_guess(n_components, sigma_atm=sigma_atm, tau=tau_val)
             lambda_w = 0.0
             lambda_mu = 0.0
+            transform_method_ = BIJECTION_FALLBACK.get(transform_method, transform_method)
+            if transform_method_ != transform_method:
+                msg = f"Transform method '{transform_method}' is not supported for the first slice. Falling back to '{transform_method_}'."
+                log.warning(msg)
         else:
+            transform_method_ = transform_method
             p0 = _force_mu_to_unit_sum(prev_params, tau_val)
             lambda_w = 0.1
             lambda_mu = 0.1
@@ -558,7 +571,7 @@ def calib_mixture_ivs(
             prev_params=prev_params,
             lambda_w=lambda_w,
             lambda_mu=lambda_mu,
-            transform_method=transform_method,
+            transform_method=transform_method_,
         )
 
         prev_params = fitted
@@ -587,7 +600,7 @@ def calib_global_mixture(
     p0 = LogNormMixParams(np.repeat(1 / n, n), np.zeros(n), np.repeat(0.2, n))
     x0, unravel = make_ravel_param(p0, make_full_encoder(tau=0.5), check_unravel=True)
 
-    #TODO: add a compensator for the forward.
+    # TODO: add a compensator for the forward.
 
     bounds = (
         np.concatenate([np.repeat(-np.inf, n - 1), np.repeat(-np.inf, n - 1), np.repeat(0.03, n)]),
@@ -649,10 +662,10 @@ def gaussian_mixture_density(x: ArrayLike, mix_weights: ArrayLike, mu: ArrayLike
     Returns:
         Array of densities at each x.
     """
-    x_ = np.asarray(x, dtype=float)[:, np.newaxis]              # (N, 1)
-    w_ = np.asarray(mix_weights, dtype=float)[np.newaxis, :]    # (1, K)
-    mu_ = np.asarray(mu, dtype=float)[np.newaxis, :]            # (1, K)
-    sigma_ = np.asarray(sigma, dtype=float)[np.newaxis, :]          # (1, K)
+    x_ = np.asarray(x, dtype=float)[:, np.newaxis]  # (N, 1)
+    w_ = np.asarray(mix_weights, dtype=float)[np.newaxis, :]  # (1, K)
+    mu_ = np.asarray(mu, dtype=float)[np.newaxis, :]  # (1, K)
+    sigma_ = np.asarray(sigma, dtype=float)[np.newaxis, :]  # (1, K)
     pdf = (1.0 / (sigma_ * np.sqrt(2 * np.pi))) * np.exp(-0.5 * ((x_ - mu_) / sigma_) ** 2)  # (N, K)
     return (w_ * pdf).sum(axis=1)
 
@@ -661,9 +674,9 @@ def gaussian_mixture_density_second_derivative(
     x: ArrayLike, mix_weights: ArrayLike, mu: ArrayLike, sigma: ArrayLike
 ) -> np.ndarray:
     """Compute second derivative of Gaussian mixture density analytically."""
-    x_ = np.asarray(x, dtype=float)[:, np.newaxis]          # (N, 1)
+    x_ = np.asarray(x, dtype=float)[:, np.newaxis]  # (N, 1)
     w_ = np.asarray(mix_weights, dtype=float)[np.newaxis, :]  # (1, K)
-    mu_ = np.asarray(mu, dtype=float)[np.newaxis, :]          # (1, K)
-    s_ = np.asarray(sigma, dtype=float)[np.newaxis, :]        # (1, K)
+    mu_ = np.asarray(mu, dtype=float)[np.newaxis, :]  # (1, K)
+    s_ = np.asarray(sigma, dtype=float)[np.newaxis, :]  # (1, K)
     pdf = (1.0 / (s_ * np.sqrt(2 * np.pi))) * np.exp(-0.5 * ((x_ - mu_) / s_) ** 2)  # (N, K)
     return (w_ * pdf * ((x_ - mu_) ** 2 - s_**2) / s_**4).sum(axis=1)

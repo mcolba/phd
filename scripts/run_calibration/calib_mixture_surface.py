@@ -97,7 +97,6 @@ if __name__ == "__main__":
         mkt=lin_mkt,
         n_components=N_COMPONENTS,
         lw_type="vega",
-        sigma_atm=0.1,
         transform_method="totvar_simplex",
         pdef=0.0,
     )

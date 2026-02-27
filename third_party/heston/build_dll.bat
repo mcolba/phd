@@ -3,6 +3,8 @@ set SRC_DIR=%~dp0
 set SRC_DIR=%SRC_DIR:~0,-1%
 set BUILD_DIR=%SRC_DIR%\build
 
+if exist "%BUILD_DIR%" rmdir /s /q "%BUILD_DIR%"
+
 cmake -S "%SRC_DIR%" ^
     -B "%BUILD_DIR%" ^
     -G "Visual Studio 17 2022" ^

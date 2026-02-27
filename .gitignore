@@ -19,6 +19,9 @@ dist/
 *.exp
 *.whl
 
+# === Other files ===
+*.png
+
 # === CMake ===
 CMakeFiles/
 CMakeCache.txt
@@ -28,9 +31,10 @@ Makefile
 # === IDE/editor junk ===
 .vscode/
 .idea/
-.DS_Store
 .ruff_cache/
 .venv/
 
 # === Exclude folders ===
 _temp/
+_deprecated/
+third_party/heston/backup/

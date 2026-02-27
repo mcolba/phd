@@ -15,10 +15,20 @@ endif()
 file(TO_CMAKE_PATH "$ENV{DEV}/cpp/eigen-5.0.0" EIGEN_DIR_DEFAULT)
 file(TO_CMAKE_PATH "$ENV{DEV}/cpp/levmar-2.6" LEVMAR_DIR_DEFAULT)
 
-# Set default paths (can be overridden by user using -D{VAR}=...)
-set(EIGEN_DIR "${EIGEN_DIR_DEFAULT}" CACHE PATH "Path to Eigen library")
-set(LEVMAR_DIR "${LEVMAR_DIR_DEFAULT}" CACHE PATH "Path to levmar library")
-set(LAPACK_DIR "${LAPACK_DIR_DEFAULT}" CACHE PATH "Path to LAPACK/MKL library")
+if(NOT DEFINED EIGEN_DIR)
+    set(EIGEN_DIR "${EIGEN_DIR_DEFAULT}")
+endif()
+if(NOT DEFINED LEVMAR_DIR)
+    set(LEVMAR_DIR "${LEVMAR_DIR_DEFAULT}")
+endif()
+if(NOT DEFINED LAPACK_DIR)
+    set(LAPACK_DIR "${LAPACK_DIR_DEFAULT}")
+endif()
+
+message(STATUS "USE_MKL:    ${USE_MKL}")
+message(STATUS "EIGEN_DIR:  ${EIGEN_DIR}")
+message(STATUS "LEVMAR_DIR: ${LEVMAR_DIR}")
+message(STATUS "LAPACK_DIR: ${LAPACK_DIR}")
 
 # Check existence
 if(NOT EXISTS "${EIGEN_DIR}")
@@ -53,10 +63,7 @@ target_link_libraries(heston PRIVATE ${LEVMAR_LIB})
 
 # Configure LAPACK backend
 if(USE_MKL)
-
-    message(STATUS "Using Intel MKL for LAPACK/BLAS")
     target_include_directories(heston PRIVATE ${LAPACK_DIR}/include)
-    
     find_library(MKL_INTEL_LIB mkl_intel_lp64 PATHS ${LAPACK_DIR}/lib REQUIRED)
     find_library(MKL_SEQUENTIAL_LIB mkl_sequential PATHS ${LAPACK_DIR}/lib REQUIRED)
     find_library(MKL_CORE_LIB mkl_core PATHS ${LAPACK_DIR}/lib REQUIRED)
@@ -67,9 +74,7 @@ if(USE_MKL)
         ${MKL_CORE_LIB}
     )
 else()
-    message(STATUS "Using CLAPACK for LAPACK/BLAS")
     target_include_directories(heston PRIVATE ${LAPACK_DIR}/include)
-    
     find_library(BLAS_LIB blas PATHS ${LAPACK_DIR}/lib REQUIRED)
     find_library(LAPACK_LIB lapack PATHS ${LAPACK_DIR}/lib REQUIRED)
     find_library(F2C_LIB f2c libf2c PATHS ${LAPACK_DIR}/lib REQUIRED)
