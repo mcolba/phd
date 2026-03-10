@@ -7,108 +7,59 @@ import numpy as np
 import pandas as pd
 
 from scripts.run_calibration.plot_helper import (
+    AXIS_LABELS,
     _instantiate_moneyness_models,
     make_iv_plt_data,
     plot_iv_slice,
     plot_mixture_combined,
 )
-from vol_risk.calibration.data.option_chain import OptionChain
-from vol_risk.calibration.data.transformers import liquidity_filter, make_otm_to_call
-from vol_risk.models.linear import calib_linear_equity_market
-from vol_risk.utils.calendar import Actual365Fixed
-from vol_risk.vol_surface.interpl.mixture import calib_mixture_ivs
+from vol_risk.calibration.data.loaders import make_cboe_chain
+from vol_risk.calibration.mixture_pipeline import ChainCutoff, ChainFilter, MixtureCalibConfig, run_mixture_pipeline
 
 plt.style.use("ggplot")
 
 N_COMPONENTS = 3
 MONEYNESS = "lkf"
 
-DEFAULT_MONEYNESS = "slkf"
-
-# Project root (phd/) and output directory
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-AXIS_LABELS = {
-    "k": "Strike (K)",
-    "kf": "Forward moneyness K/F",
-    "lkf": "log-forward moneyness log(K/F)",
-    "slkf": "std log-forward moneyness log(K/F) / (sqrt(tau) * sigma)",
-    "delta": "Call delta",
-}
-
-AXIS_LIMITS = {
-    "kf": (0.2, 2),
-    "lkf": (-0.5, 0.5),
-    "slkf": (-5, 3),
-    "delta": (0.02, 0.98),
-}
-
 
 if __name__ == "__main__":
     plots_coord = MONEYNESS
 
-    # 1. Import option chain data
-    input_data_path = Path().resolve() / "data" / "test" / "CBOE_EOD_2023-08-25.csv"
+    # 1. Load CBOE data and build option chain
+    input_data_path = PROJECT_ROOT / "data" / "test" / "CBOE_EOD_2023-08-25.csv"
+    df = pd.read_csv(input_data_path)
+    chain_all = make_cboe_chain(df, underlying_symbol="^SPX", root="SPX")
 
-    df = (
-        pd.read_csv(input_data_path)
-        .rename(
-            columns={
-                "quote_date": "anchor",
-                "expiration": "expiry",
-                "trade_volume": "volume",
-                "bid_eod": "bid",
-                "ask_eod": "ask",
-            }
-        )
-        .assign(
-            spot=lambda x: 0.5 * (x["underlying_bid_eod"] + x["underlying_ask_eod"]),
-            anchor=lambda x: pd.to_datetime(x["anchor"], format="%Y-%m-%d", errors="raise"),
-            expiry=lambda x: pd.to_datetime(x["expiry"], format="%Y-%m-%d", errors="raise"),
-            mid=lambda x: 0.5 * (x["bid"] + x["ask"]),
-        )
+    # 2. Run calibration pipeline
+    cutoff_cfg = ChainCutoff(moneyness_type="delta", bounds=(0.01, 0.99))
+    filter_config = ChainFilter(
+        oi_min=3,
+        bid_min=0.01,
+        mid_min=0.02,
+        cutoff=cutoff_cfg,
     )
-
-    def liq_filter(chain):
-        return liquidity_filter(
-            chain,
-            oi_min=3,
-            bid_min=0.001,
-            mid_min=0.02,
-        )
-
-    spx_mask = (df["underlying_symbol"] == "^SPX") & (df["root"] == "SPX")
-    check1 = (df["ask"] - df["bid"]) >= 0
-    check2 = df["mid"] > 0
-    df_spx = df.loc[spx_mask & check1 & check2]
-    chain_all = liq_filter(OptionChain(df_spx, Actual365Fixed))
-    chain_liq = liq_filter(chain_all)
-
-    # 2. Calibrate linear market model
-    lin_mkt, _ = calib_linear_equity_market(chain_liq)
-
-    # cutoff_moneyness = MONEYNESS_REGISTRY["delta"](lin_mkt)
-    # chain_otm = apply_cutoffs(chain_liq, moneyness=cutoff_moneyness, bounds=(0.01, 0.99))
-    chain_otm = make_otm_to_call(chain_liq, lin_mkt)
-
-    # 3. Calibrate log-normal mixture for each slice
-    surface, stats = calib_mixture_ivs(
-        opt=chain_otm,
-        mkt=lin_mkt,
+    config = MixtureCalibConfig(
         n_components=N_COMPONENTS,
         lw_type="vega",
-        transform_method="totvar_simplex",
-        pdef=0.0,
+        transform_method="totvar",
     )
 
-    mix_by_expiry = {expiry: stats[expiry]["params"] for expiry in stats}
+    result = run_mixture_pipeline(chain_all, config)
+
+    surface = result.surface
+    stats_lin, stats_ivs = result.stats
+    lin_mkt = result.lin_mkt
+    chain_otm = result.chain_otm
+
+    mix_by_expiry = {expiry: stats_ivs[expiry]["params"] for expiry in stats_ivs}
     expiries_sorted = sorted(mix_by_expiry)
 
-    # 4. Plot log-normal mixture parameters by maturity
+    # 3. Plot log-normal mixture parameters by maturity
     moneyness_models = _instantiate_moneyness_models(le=lin_mkt)
 
     if expiries_sorted:
-        taus = np.array([stats[e]["tau"] for e in expiries_sorted], dtype=float)
+        taus = np.array([stats_ivs[e]["tau"] for e in expiries_sorted], dtype=float)
         n_expiries = len(expiries_sorted)
         comp_count = N_COMPONENTS
 
@@ -140,20 +91,18 @@ if __name__ == "__main__":
         axes_params[-1].set_xlabel("tau (years)")
         axes_params[0].legend(title="Component", fontsize=8)
 
-    # 5. Plot total variance curves for all maturities
+    # 4. Plot total variance curves for all maturities
     if expiries_sorted:
         plt.figure(figsize=(10, 6))
-        spot = chain_all.spot
         axis_label = AXIS_LABELS["kf"]
         m_common = np.linspace(0.2, 2, 100)
 
         total_var = []
         for expiry in expiries_sorted:
-            tau = stats[expiry]["tau"]
+            tau = stats_ivs[expiry]["tau"]
             fwd_value = float(lin_mkt.fwd(tau))
             k_grid = m_common * fwd_value
-            t_grid = np.full_like(k_grid, tau, dtype=float)
-            iv_model = surface.vol(k_grid, t_grid)
+            iv_model = surface.vol(k_grid, np.full_like(k_grid, tau, dtype=float))
             total_var_t = iv_model**2 * tau
             plt.plot(m_common, total_var_t, label=f"tau={tau:.2f}")
             total_var.append(total_var_t)
@@ -167,15 +116,10 @@ if __name__ == "__main__":
 
         total_var = np.array(total_var)
         tv_diff = total_var[1:, :] - total_var[:-1, :]
-
         if np.any(tv_diff < -1e-3):
             print("Calendar arbitrage detected!")
 
-        plt.plot(m_common, total_var[10, :], label=f"tau={tau:.2f}")
-        plt.plot(m_common, total_var[11, :], label=f"tau={tau:.2f}")
-        plt.show()
-
-    # 6. Plot market implied vols vs mixture surface (by expiry)
+    # 5. Plot market implied vols vs mixture surface (by expiry)
     expiries = np.unique(chain_all.expiry)
     n = expiries.size
     n_col = 2
@@ -183,20 +127,16 @@ if __name__ == "__main__":
     fig, axes = plt.subplots(n_row, n_col, sharex=True, sharey=True, figsize=(10, 25))
     axes = np.atleast_1d(axes).ravel()
 
-    spot = chain_all.spot
     axis_label = AXIS_LABELS[plots_coord]
 
     for idx, (expiry, sl) in enumerate(chain_all):
         ax = axes[idx]
-
         df_plt = make_iv_plt_data(sl, chain_otm, lin_mkt, plots_coord)
-        plot_iv_slice(ax, df_plt, lin_mkt, surface, sl, plots_coord, spot, idx, expiry)
+        plot_iv_slice(ax, df_plt, lin_mkt, surface, sl, plots_coord, chain_all.spot, idx, expiry)
 
-    # Hide any unused axes
     for j in range(idx + 1, axes.size):
         axes[j].axis("off")
 
-    # Common labels
     for ax in axes[: min(n, axes.size)]:
         ax.set_xlabel(axis_label)
     handles, labels = axes[0].get_legend_handles_labels()
@@ -206,7 +146,7 @@ if __name__ == "__main__":
     plt.tight_layout()
     plt.show()
 
-    # 7. Example: plot smile and risk-neutral density side by side
+    # 6. Plot smile and risk-neutral density side by side for selected expiries
     def _plot_nth_smile(idx: int, file_name: Path) -> None:
         example_expiry = expiries_sorted[idx]
         example_params = mix_by_expiry[example_expiry]

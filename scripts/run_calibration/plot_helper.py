@@ -14,17 +14,17 @@ from vol_risk.vol_surface.moneyness import MONEYNESS_REGISTRY, Moneyness
 from vol_risk.vol_surface.surface import VolSurface
 
 AXIS_LABELS = {
-    "k": "Strike (K)",
-    "kf": "Forward moneyness K/F",
-    "lkf": "log-forward moneyness log(K/F)",
-    "slkf": "std log-forward moneyness log(K/F) / (sqrt(tau) * sigma)",
+    "k": "Strike",
+    "kf": "Forward moneyness",
+    "lkf": "Log-forward moneyness",
+    "slkf": "Std log-forward moneyness",
     "delta": "Call delta",
 }
 
 AXIS_LIMITS = {
     "kf": (0.2, 2),
     "lkf": (-0.5, 0.5),
-    "slkf": (-5, 3),
+    "slkf": (-5, 5),
     "delta": (0.01, 0.99),
 }
 
@@ -332,7 +332,7 @@ def plot_iv_slice(
             )
 
     # Mixture surface on same axes
-    k_grid = np.linspace(0.2 * spot, 2 * spot, 100)
+    k_grid = np.linspace(0.2 * spot, 4 * spot, 100)
     t_grid = np.full_like(k_grid, sl.slice_tau, dtype=float)
     iv_model = surface.vol(k_grid, t_grid)
 
