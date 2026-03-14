@@ -140,9 +140,9 @@ def make_full_encoder(tau: float, method: str = "simplex") -> tuple:
         x0, x1, sigma = free
 
         w = angles_to_simplex(x0)
-        z = angles_to_simplex(x1)
 
         if method == "simplex":
+            z = angles_to_simplex(x1)
             mu = np.log(z / w) / tau
         elif method == "manual":
             partial_sum = np.dot(w[:-1], np.exp(x1 * tau))
@@ -380,6 +380,8 @@ def calib_mixture_smile(
     lambda_mu: float = 0.0,
     lambda_sigma: float = 0.0,
     pdef: float = 0.0,
+    lambda_ca: float = 0.0,
+    no_arb_data: np.ndarray | None = None,
 ) -> np.ndarray:
     """Calibrate a log-normal mixture model to option prices."""
     if p0 is None:
@@ -439,6 +441,21 @@ def calib_mixture_smile(
             residuals = np.concatenate([residuals, delta_sigma])
             weights = np.concatenate([weights, np.repeat(lambda_sigma, delta_sigma.size)])
 
+        if lambda_ca > 0.0 and no_arb_data is not None:
+            prices = _mixed_log_norm_call(
+                w=param.w,
+                mu=param.mu,
+                sigma=param.sigma,
+                DF=df,
+                F=fwd,
+                K=no_arb_data[:, 0],
+                tau=tau,
+                pdef=pdef,
+            )
+            arbitrage = np.sqrt(softplus(no_arb_data[:, 1] - prices, beta=0.1))
+            residuals = np.concatenate([residuals, arbitrage])
+            weights = np.concatenate([weights, np.repeat(lambda_ca, arbitrage.size)])
+
         return np.sqrt(weights) * residuals
 
     res = least_squares(
@@ -447,13 +464,14 @@ def calib_mixture_smile(
         jac="3-point",
         method="trf",
         bounds=bounds,
+        x_scale="jac",
     )
 
     if not res.success:
         msg = f"Log-normal mixture calibration did not converge: {res.message}"
         log.warning(msg)
 
-    return unravel(res.x)
+    return unravel(res.x), {"error": res.fun[: len(mkt_prices)]}
 
 
 def _make_smile_fun(params: LogNormMixParams, market: LinearEquityMarket, tau: float, pdef: float = 0.0) -> VolSmile:
@@ -501,32 +519,35 @@ def calib_mixture_ivs(
     pdef: float = 0.0,
     x0: LogNormMixParams | None = None,
     transform_method: str = "base",
-) -> tuple[VolSurface, dict]:
+) -> tuple[VolSurface, LogNormMixParams]:
     """Calibrate a log-normal mixture model to each expiry slice."""
+    lambda_ca = 0.0
+
     if transform_method not in BIJECTION_METHODS:
         msg = f"Unsupported transform method: {transform_method}"
         raise ValueError(msg)
 
     taus: list[float] = []
     smiles: list[VolSmile] = []
-    stats: dict = {}
+    params: dict = {}
 
     prev_params = x0
 
+    prev_tau = None
     for t, opt_slice in opt:
         sigma_atm = get_atmf_vol(opt_slice, mkt)
 
         k_sl = opt_slice.k
         mid_sl = opt_slice.mid
-        tau_val = opt_slice.tau[0]
+        tau = opt_slice.tau[0]
 
         # Obtain scalar discount factor and forward for this maturity.
-        tau_vec = np.array([tau_val], dtype=float)
+        tau_vec = np.array([tau], dtype=float)
         df = float(mkt.df(tau_vec)[0])
         fwd = float(mkt.fwd(tau_vec)[0])
 
         if len(np.unique(opt_slice.k)) != len(opt_slice.k):
-            msg = f"Duplicate strikes found in option slice for tau={tau_val}."
+            msg = f"Duplicate strikes found in option slice for tau={tau}."
             raise ValueError(msg)
 
         if lw_type is None or lw_type == "uniform":
@@ -534,34 +555,52 @@ def calib_mixture_ivs(
         elif lw_type == "vega":
             iv = np.array(
                 [
-                    implied_vol_jackel(price=market_price, f=fwd, k=k, t=tau_val, df=df, is_call=opt_type == "C")
+                    implied_vol_jackel(price=market_price, f=fwd, k=k, t=tau, df=df, is_call=opt_type == "C")
                     for market_price, k, opt_type in zip(opt_slice.mid, opt_slice.k, opt_slice.option_type, strict=True)
                 ]
             ).clip(0.01, 1)
-            loss_weights = 1 / np.maximum(black76_vega(df=df, f=fwd, k=k_sl, t=tau_val, sigma=iv), 1e-4)
+            loss_weights = 1 / np.maximum(black76_vega(df=df, f=fwd, k=k_sl, t=tau, sigma=iv), 1e-4)
         else:
             msg = f"Unsupported weights type: {lw_type}"
             raise ValueError(msg)
 
         if prev_params is None:
-            p0 = _smirk_start_guess(n_components, sigma_atm=sigma_atm, tau=tau_val)
+            p0 = _smirk_start_guess(n_components, sigma_atm=sigma_atm, tau=tau)
             # p0 = _uninformative_start_guess(n_components, sigma_atm=sigma_atm, tau=tau_val)
             lambda_w = 0.0
             lambda_mu = 0.0
+            lambda_sigma = 0.0
             transform_method_ = BIJECTION_FALLBACK.get(transform_method, transform_method)
             if transform_method_ != transform_method:
-                msg = f"Transform method '{transform_method}' is not supported for the first slice. Falling back to '{transform_method_}'."
-                log.warning(msg)
+                msg = f""" Transform method '{transform_method}' is not supported for the first slice.
+                Falling back to '{transform_method_}'."""
+                log.info(msg)
         else:
             transform_method_ = transform_method
-            p0 = _force_mu_to_unit_sum(prev_params, tau_val)
-            lambda_w = 0.1
+            p0 = _force_mu_to_unit_sum(prev_params, tau)
+            lambda_w = 0.01
             lambda_mu = 0.1
+            lambda_sigma = 0.00
 
-        fitted = calib_mixture_smile(
+        if lambda_ca > 0.0 and prev_tau is not None:
+            strike_grid = np.linspace(fwd * 0.5, fwd * 1.5, 10)
+            no_arb_data = np.empty((10, 2))
+            no_arb_data[:, 0] = strike_grid
+            no_arb_data[:, 1] = black76_price(
+                df=mkt.df(prev_tau),
+                f=mkt.fwd(prev_tau),
+                k=strike_grid,
+                t=prev_tau,
+                sigma=smiles[-1].vol(strike_grid),
+                is_call=True,
+            )
+        else:
+            no_arb_data = None
+
+        fitted, stats = calib_mixture_smile(
             n=n_components,
             k=k_sl,
-            tau=tau_val,
+            tau=tau,
             fwd=fwd,
             df=df,
             mkt_prices=mid_sl,
@@ -571,75 +610,22 @@ def calib_mixture_ivs(
             prev_params=prev_params,
             lambda_w=lambda_w,
             lambda_mu=lambda_mu,
+            lambda_sigma=lambda_sigma,
             transform_method=transform_method_,
+            no_arb_data=no_arb_data,
+            lambda_ca=lambda_ca,
         )
 
         prev_params = fitted
-        taus.append(float(tau_val))
-        smiles.append(_make_smile_fun(fitted, mkt, tau_val, pdef=pdef))
-        stats[t] = {
-            "tau": tau_val,
+        prev_tau = tau
+        taus.append(float(tau))
+        smiles.append(_make_smile_fun(fitted, mkt, tau, pdef=pdef))
+        params[t] = {
+            "tau": tau,
             "params": fitted,
         }
 
-    return VolSurface(np.array(taus, dtype=float), smiles), stats
-
-
-def calib_global_mixture(
-    n: int,
-    option_chain: pd.DataFrame,
-    loss_weights: float | np.ndarray = 1,
-) -> LogNormMixParams:
-    """Calibrate a single log-normal mixture to all expiry slices simultaneously.
-
-    Args:
-        n: Number of mixture components.
-        option_chain: DataFrame with columns K, tau, df, fwd, price.
-        loss_weights: Scalar or per-observation weights applied to residuals.
-    """
-    p0 = LogNormMixParams(np.repeat(1 / n, n), np.zeros(n), np.repeat(0.2, n))
-    x0, unravel = make_ravel_param(p0, make_full_encoder(tau=0.5), check_unravel=True)
-
-    # TODO: add a compensator for the forward.
-
-    bounds = (
-        np.concatenate([np.repeat(-np.inf, n - 1), np.repeat(-np.inf, n - 1), np.repeat(0.03, n)]),
-        np.concatenate([np.repeat(np.inf, n - 1), np.repeat(np.inf, n - 1), np.repeat(np.inf, n)]),
-    )
-
-    def _loss_function(
-        x: np.ndarray,
-        tau: ArrayLike,
-        disc: ArrayLike,
-        fwd: ArrayLike,
-        k: ArrayLike,
-        mkt_opt_p: ArrayLike,
-    ) -> np.ndarray:
-        param = unravel(x)
-        model_price = _mixed_log_norm_call(
-            w=param.w,
-            mu=param.mu,
-            sigma=param.sigma,
-            DF=disc,
-            F=fwd,
-            K=k,
-            tau=tau,
-        )
-        return model_price - mkt_opt_p
-
-    res = least_squares(
-        fun=lambda x: loss_weights
-        * _loss_function(x, option_chain.tau, option_chain.df, option_chain.fwd, option_chain.K, option_chain.price),
-        x0=x0,
-        jac="2-point",
-        method="trf",
-        bounds=bounds,
-    )
-
-    if not res.success:
-        log.warning("Global log-normal mixture calibration did not converge: %s", res.message)
-
-    return unravel(res.x)
+    return VolSurface(np.array(taus, dtype=float), smiles), params
 
 
 def gaussian_pdf(x: ArrayLike, mu: ArrayLike, sigma: ArrayLike) -> np.ndarray:

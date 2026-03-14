@@ -1,6 +1,7 @@
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from itertools import product
 
 import numpy as np
 import pandas as pd
@@ -11,6 +12,14 @@ from sklearn.linear_model import LinearRegression
 from vol_risk.calibration.data.option_chain import OptionChain
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class LinearEquityParams:
+    """Data class to hold the parameters of a linear equity market model."""
+    tau: np.ndarray
+    r: np.ndarray
+    q: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -125,16 +134,21 @@ def make_simple_linear_market(s: float = 100.0, r: float = 0, q: float = 0) -> L
 
 def put_call_df(opt: OptionChain) -> pd.DataFrame:
     """Create a DataFrame with call-put differences and bid-ask bounds."""
-    pt = opt.df.pivot_table(index=["strike", "spot"], columns="option_type", values=["mid", "bid", "ask"]).pipe(
-        lambda x: x.loc[x.notna().all(axis=1), :]
-    )
+    idx = pd.MultiIndex.from_frame(opt.df[["strike", "spot"]].drop_duplicates())
+    col = pd.MultiIndex.from_tuples(product(["ask", "bid", "mid"], ["C", "P"]), names=[None, "option_type"])
+    df = pd.DataFrame(index=idx, columns=col)
 
-    g_mid = pt.loc[:, ("mid", "C")] - pt.loc[:, ("mid", "P")]
-    g_min = pt.loc[:, ("bid", "C")] - pt.loc[:, ("ask", "P")]
-    g_max = pt.loc[:, ("ask", "C")] - pt.loc[:, ("bid", "P")]
+    pt = opt.df.pivot_table(index=["strike", "spot"], columns="option_type", values=["mid", "bid", "ask"])
+    df = df.combine_first(pt)
+    mask = df.iloc[:, df.columns.get_level_values(0) == "mid"].notna().all(axis=1)
+    df = df[mask]
+
+    g_mid = df.loc[:, ("mid", "C")] - df.loc[:, ("mid", "P")]
+    g_min = df.loc[:, ("bid", "C")] - df.loc[:, ("ask", "P")]
+    g_max = df.loc[:, ("ask", "C")] - df.loc[:, ("bid", "P")]
 
     return (
-        pd.DataFrame(index=pt.index)
+        pd.DataFrame(index=df.index)
         .assign(
             g_mid=g_mid,
             g_min=g_min,
@@ -169,8 +183,16 @@ def calib_linear_equity_market(opt: OptionChain, axes=None) -> tuple[LinearEquit
 
         if pc_df.shape[0] < 10:
             msg = f"Maturity {t} has less than 10 observables. It will be skipped."
-            logger.warning(msg)
+            logger.info(msg)
+            stats[t] = {
+                "coeff": (np.nan, np.nan),
+                "n_obs": int(pc_df.shape[0]),
+                "in_bid_ask": np.nan,
+                "tau": float(tau[i]),
+                "excluded": True,
+            }
             valid_idx[i] = False
+            continue
 
         # Calculate P - C and perform linear regression against strike (K)
         K = pc_df["strike"].to_numpy().reshape(-1, 1)
@@ -222,10 +244,16 @@ def calib_linear_equity_market(opt: OptionChain, axes=None) -> tuple[LinearEquit
     r = -np.log(beta[valid_idx]) / tau[valid_idx]
     q = -np.log(alpha[valid_idx] / spot) / tau[valid_idx]
 
+    params = {
+        "tau": tau[valid_idx],
+        "r": r,
+        "q": q,
+    }
+
     model = LinearEquityMarket(
         spot=float(spot),
         disc_curve=make_raw_disc_curve(tau=tau[valid_idx], r=r),
         cont_carry_curve=make_raw_interpolator(tau=tau[valid_idx], r=q),
     )
 
-    return model, stats
+    return model, params, stats

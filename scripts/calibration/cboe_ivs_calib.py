@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from scripts.run_calibration.plot_helper import (
+from scripts.calibration.plot_helper import (
     AXIS_LABELS,
     _instantiate_moneyness_models,
     make_iv_plt_data,
@@ -15,6 +16,8 @@ from scripts.run_calibration.plot_helper import (
 )
 from vol_risk.calibration.data.loaders import make_cboe_chain
 from vol_risk.calibration.mixture_pipeline import ChainCutoff, ChainFilter, MixtureCalibConfig, run_mixture_pipeline
+
+logger = logging.getLogger(__name__)
 
 plt.style.use("ggplot")
 
@@ -42,24 +45,24 @@ if __name__ == "__main__":
     config = MixtureCalibConfig(
         n_components=N_COMPONENTS,
         lw_type="vega",
-        transform_method="totvar",
+        transform_method="totvar_simplex",
     )
 
     result = run_mixture_pipeline(chain_all, config)
 
     surface = result.surface
-    stats_lin, stats_ivs = result.stats
+    params_ivs = result.params[1]
     lin_mkt = result.lin_mkt
     chain_otm = result.chain_otm
 
-    mix_by_expiry = {expiry: stats_ivs[expiry]["params"] for expiry in stats_ivs}
+    mix_by_expiry = {expiry: params_ivs[expiry]["params"] for expiry in params_ivs}
     expiries_sorted = sorted(mix_by_expiry)
 
     # 3. Plot log-normal mixture parameters by maturity
     moneyness_models = _instantiate_moneyness_models(le=lin_mkt)
 
     if expiries_sorted:
-        taus = np.array([stats_ivs[e]["tau"] for e in expiries_sorted], dtype=float)
+        taus = np.array([params_ivs[e]["tau"] for e in expiries_sorted], dtype=float)
         n_expiries = len(expiries_sorted)
         comp_count = N_COMPONENTS
 
@@ -85,7 +88,7 @@ if __name__ == "__main__":
                 label = f"{prefix}_{comp_idx + 1}" if ax_idx == 0 else None
                 ax.plot(taus, mat[:, comp_idx], marker="o", linewidth=1.0, label=label)
             ax.set_title(title)
-            ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.5)
+            ax.grid(visible=True, linestyle="--", linewidth=0.5, alpha=0.5)
             ax.set_ylabel("Value")
 
         axes_params[-1].set_xlabel("tau (years)")
@@ -99,7 +102,7 @@ if __name__ == "__main__":
 
         total_var = []
         for expiry in expiries_sorted:
-            tau = stats_ivs[expiry]["tau"]
+            tau = params_ivs[expiry]["tau"]
             fwd_value = float(lin_mkt.fwd(tau))
             k_grid = m_common * fwd_value
             iv_model = surface.vol(k_grid, np.full_like(k_grid, tau, dtype=float))
@@ -111,13 +114,13 @@ if __name__ == "__main__":
         plt.xlabel(axis_label)
         plt.ylabel("Total Variance")
         plt.legend()
-        plt.grid(True, linestyle="--", linewidth=0.5, alpha=0.5)
+        plt.grid(visible=True, linestyle="--", linewidth=0.5, alpha=0.5)
         plt.show()
 
         total_var = np.array(total_var)
         tv_diff = total_var[1:, :] - total_var[:-1, :]
         if np.any(tv_diff < -1e-3):
-            print("Calendar arbitrage detected!")
+            logger.warning("Calendar arbitrage detected!")
 
     # 5. Plot market implied vols vs mixture surface (by expiry)
     expiries = np.unique(chain_all.expiry)

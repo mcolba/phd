@@ -4,7 +4,10 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import ArrayLike
 
-from vol_risk.models.black76 import bsm_spot_delta, bsm_spot_delta_to_strike
+from vol_risk.models.black76 import (
+    black76_undisc_fwd_delta,
+    black76_undisc_fwd_delta_to_strike,
+)
 from vol_risk.models.linear import LinearEquityMarket
 
 MONEYNESS_REGISTRY = {}
@@ -88,23 +91,21 @@ class DeltaMoneyness(Moneyness):
     """Forward delta moneyness: delta(K, tau, sigma)."""
 
     def value(self, *, strike: ArrayLike, tau: ArrayLike, sigma: ArrayLike, **_) -> ArrayLike:
-        return bsm_spot_delta(
-            s=self.le.spot,
+        return black76_undisc_fwd_delta(
+            f=self.le.fwd(tau),
             k=strike,
             t=tau,
             r=self.le.zero_rate(tau),
-            q=self.le.zero_dvd_yield(tau),
             sigma=sigma,
             is_call=True,
         )
 
     def invert(self, *, moneyness: ArrayLike, tau: ArrayLike, sigma: ArrayLike, **_) -> ArrayLike:
-        return bsm_spot_delta_to_strike(
+        return black76_undisc_fwd_delta_to_strike(
             delta=moneyness,
-            s=self.le.spot,
+            f=self.le.fwd(tau),
             t=tau,
             r=self.le.zero_rate(tau),
-            q=self.le.zero_dvd_yield(tau),
             sigma=sigma,
             is_call=True,
         )

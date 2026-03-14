@@ -11,8 +11,8 @@ import pandas as pd
 
 from vol_risk.models.black76 import (
     black76_fwd_delta,
-    black76_fwd_delta_to_strike,
     black76_price,
+    black76_undisc_fwd_delta_to_strike,
     black76_vega,
     bsm_price,
     bsm_spot_delta,
@@ -125,11 +125,13 @@ class TestBlack76(unittest.TestCase):
                 err_msg=f"row id={row.id}",
             )
 
-    def test_delta(self) -> None:
-        adj = np.exp((self.df.q - self.df.r) * self.df.tau)
+    def test_delta_to_strike(self) -> None:
+        spot_to_fwd_adj = np.exp((self.df.q - self.df.r) * self.df.tau)
+        disc = np.exp(-self.df.r * self.df.tau)
+        undisc_fwd_delta = self.df.delta * spot_to_fwd_adj / disc
         expected = self.df.K
-        result = black76_fwd_delta_to_strike(
-            delta=self.df.delta * adj,
+        result = black76_undisc_fwd_delta_to_strike(
+            delta=undisc_fwd_delta,
             f=self.df.F,
             t=self.df.tau,
             r=self.df.r,

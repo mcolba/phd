@@ -65,14 +65,25 @@ def black76_fwd_delta(
 ) -> ArrayLike:
     """Calculate the Black-76 delta for European options."""
     f, k, t, r, sigma, is_call = map(np.atleast_1d, (f, k, t, r, sigma, is_call))
-
-    d1 = (np.log(f / k) + 0.5 * sigma**2 * t) / (sigma * np.sqrt(t))
     df = np.exp(-r * t)
+    return df * black76_undisc_fwd_delta(f, k, t, r, sigma, is_call)
 
-    return np.where(is_call, df * norm.cdf(d1), -df * norm.cdf(-d1))
+
+def black76_undisc_fwd_delta(
+    f: ArrayLike,
+    k: ArrayLike,
+    t: ArrayLike,
+    r: ArrayLike,
+    sigma: ArrayLike,
+    is_call: ArrayLike,
+) -> ArrayLike:
+    """Calculate the Black-76 delta for European options."""
+    f, k, t, r, sigma, is_call = map(np.atleast_1d, (f, k, t, r, sigma, is_call))
+    d1 = (np.log(f / k) + 0.5 * sigma**2 * t) / (sigma * np.sqrt(t))
+    return np.where(is_call, norm.cdf(d1), -norm.cdf(-d1))
 
 
-def black76_fwd_delta_to_strike(
+def black76_undisc_fwd_delta_to_strike(
     delta: ArrayLike,
     f: ArrayLike,
     t: ArrayLike,
@@ -83,13 +94,12 @@ def black76_fwd_delta_to_strike(
     """Calculate the Black-76 delta for European options."""
     f, t, r, sigma, is_call = map(np.atleast_1d, (f, t, r, sigma, is_call))
 
-    df = np.exp(-r * t)
     total_vol = sigma * np.sqrt(t)
 
     return np.where(
         is_call,
-        f * np.exp(-total_vol * norm.ppf(delta / df) + 0.5 * total_vol**2),
-        f * np.exp(total_vol * norm.ppf(-delta / df) + 0.5 * total_vol**2),
+        f * np.exp(-total_vol * norm.ppf(delta) + 0.5 * total_vol**2),
+        f * np.exp(total_vol * norm.ppf(-delta) + 0.5 * total_vol**2),
     )
 
 
@@ -181,28 +191,6 @@ def bsm_spot_delta(
     return adj * black76_fwd_delta(
         f=fwd,
         k=k,
-        t=t,
-        r=r,
-        sigma=sigma,
-        is_call=is_call,
-    )
-
-
-def bsm_spot_delta_to_strike(
-    delta: ArrayLike,
-    s: ArrayLike,
-    t: ArrayLike,
-    sigma: ArrayLike,
-    r: ArrayLike,
-    q: ArrayLike,
-    is_call: ArrayLike,
-) -> ArrayLike:
-    """Black-Scholes-Merton price using Black-76 formula."""
-    adj = np.exp((r - q) * t)
-    fwd = s * np.exp((r - q) * t)
-    return (1 / adj) * black76_fwd_delta_to_strike(
-        delta=delta,
-        f=fwd,
         t=t,
         r=r,
         sigma=sigma,

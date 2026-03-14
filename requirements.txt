@@ -4,4 +4,6 @@ numpy>=2.3.4
 pandas>=2.3.3
 pandera>=0.26.1
 scipy>=1.15.3
+pyarrow>=23.0.1
+tqdm>=4.67.3
 .\third_party\jaeckel

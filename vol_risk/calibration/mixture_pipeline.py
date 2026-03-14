@@ -11,8 +11,8 @@ from dataclasses import dataclass, field
 
 from vol_risk.calibration.data.option_chain import OptionChain
 from vol_risk.calibration.data.transformers import apply_cutoffs, liquidity_filter, make_otm_to_call
-from vol_risk.models.linear import calib_linear_equity_market
-from vol_risk.vol_surface.interpl.mixture import VolSurface, calib_mixture_ivs
+from vol_risk.models.linear import LinearEquityMarket, LinearEquityParams, calib_linear_equity_market
+from vol_risk.vol_surface.interpl.mixture import LogNormMixParams, VolSurface, calib_mixture_ivs
 from vol_risk.vol_surface.moneyness import MONEYNESS_REGISTRY
 
 log = logging.getLogger(__name__)
@@ -39,13 +39,16 @@ class ChainFilter:
         oi_min: Minimum open interest for liquidity filter.
         bid_min: Minimum bid price for liquidity filter.
         mid_min: Minimum mid price for liquidity filter.
+        rel_bid_ask: Minimum relative bid-ask spread for liquidity filter.
         cutoff: Optional moneyness cutoff config. None disables cutoffs.
     """
 
     oi_min: int = 3
     bid_min: float = 0.01
     mid_min: float = 0.02
+    rel_bid_ask_max: float | None = None
     cutoff: ChainCutoff | None = None
+    min_k_per_slice: int = 3
 
 
 @dataclass(frozen=True)
@@ -57,7 +60,7 @@ class MixtureCalibConfig:
         lw_type: Loss-weight scheme passed to ``calib_mixture_ivs`` ("vega" or "uniform").
         transform_method: Bijection method passed to ``calib_mixture_ivs`` (e.g. "totvar", "simplex").
         pdef: Probability-of-default parameter.
-        filter: Option filter settings (liquidity and cutoff).
+        filters: Option filter settings (liquidity and cutoff).
     """
 
     n_components: int = 3
@@ -79,9 +82,10 @@ class MixtureCalibResult:
         chain_otm: Filtered OTM option chain used during calibration.
     """
 
-    lin_mkt: object
+    lin_mkt: LinearEquityMarket
     surface: VolSurface
-    stats: tuple[object, dict]
+    params: tuple[LinearEquityParams, list[LogNormMixParams]]
+    stats: tuple[dict, dict]
     chain_otm: OptionChain
 
 
@@ -115,16 +119,19 @@ def run_mixture_pipeline(
         oi_min=filt_cfg.oi_min,
         bid_min=filt_cfg.bid_min,
         mid_min=filt_cfg.mid_min,
+        rel_bid_ask_max=filt_cfg.rel_bid_ask_max,
+        min_k_per_slice=filt_cfg.min_k_per_slice,
     )
 
     log.info("Options after liquidity filter: %d", len(chain_liq))
 
     # 2. Calibrate linear equity market (rates / dividends)
-    lin_mkt, lin_stats = calib_linear_equity_market(chain_liq)
+    lin_mkt, lin_mkt_params, lin_stats = calib_linear_equity_market(chain_liq)
     log.debug("Linear market calibration stats: %s", lin_stats)
 
     # 3. Convert to OTM calls
     chain_otm = make_otm_to_call(chain_liq, lin_mkt)
+    log.info("Options after OTM conversion: %d", len(chain_otm))
 
     # 4. Optionally apply moneyness cutoffs
     if filt_cfg.cutoff is not None:
@@ -137,7 +144,7 @@ def run_mixture_pipeline(
         log.info("Options after cutoff filter: %d", len(chain_otm))
 
     # 5. Calibrate log-normal mixture for each expiry slice
-    surface, stats = calib_mixture_ivs(
+    surface, ivs_params = calib_mixture_ivs(
         opt=chain_otm,
         mkt=lin_mkt,
         n_components=config.n_components,
@@ -146,11 +153,12 @@ def run_mixture_pipeline(
         pdef=config.pdef,
     )
 
-    log.info("Calibration complete. Expiries calibrated: %d", len(stats))
+    log.info("Calibration complete. Expiries calibrated: %d", len(ivs_params))
 
     return MixtureCalibResult(
         surface=surface,
         lin_mkt=lin_mkt,
-        stats=(lin_mkt, stats),
+        params=(lin_mkt_params, ivs_params),
+        stats=lin_stats,
         chain_otm=chain_otm,
     )

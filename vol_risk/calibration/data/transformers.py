@@ -13,12 +13,13 @@ def liquidity_filter(
     bid_min: None | float = None,
     mid_min: None | float = None,
     rel_bid_ask_max: None | float = None,
+    min_k_per_slice: int = 3,
 ) -> OptionChain:
     """Filter an option chain for liquid contracts."""
     df = chain.df.copy()
 
+    # Liquidity filters
     mask = pd.Series(data=True, index=df.index)
-
     if oi_min is not None:
         mask &= (df["open_interest"].notna()) & (df["open_interest"] >= oi_min)
     if bid_min is not None:
@@ -31,7 +32,14 @@ def liquidity_filter(
             raise ValueError(msg)
         mask &= ((df["ask"] - df["bid"]) / df["mid"]) <= rel_bid_ask_max
 
-    return chain.__class__(df.loc[mask, :].copy(), chain._calendar)
+    df = df.loc[mask, :]
+
+    # Ensure each slice has at least min_k_per_slice strikes
+    slice_mask = pd.Series(data=True, index=df.index)
+    if min_k_per_slice > 1:
+        slice_mask &= df.groupby("expiry")["strike"].transform("nunique") >= min_k_per_slice
+
+    return chain.__class__(df.loc[slice_mask].copy(), chain._calendar)
 
 
 def make_otm_to_call(chain: OptionChain, le: LinearEquityMarket) -> OptionChain:
@@ -71,10 +79,12 @@ def get_atmf_vol(chain: OptionSlice, le: LinearEquityMarket) -> float:
 
     k = 3
     idx_closest = np.searchsorted(strike, fwd)
-    mask = np.concatenate(
-        [range(max(idx_closest - k, 0), idx_closest), range(idx_closest, min(idx_closest + k, len(strike)))]
-    )
-    z = np.polyfit(strike[mask], price[mask], 2)
+    idx_first = max(idx_closest - k, 0)
+    idx_last = min(idx_closest + k + 1, len(strike))
+    mask = list(range(idx_first, idx_last))
+
+    deg = 2 if len(mask) > 2 else 1
+    z = np.polyfit(strike[mask], price[mask], deg)
     atm_price = np.poly1d(z)(fwd)
 
     vol = implied_vol_jackel(
