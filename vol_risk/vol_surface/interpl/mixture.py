@@ -8,7 +8,7 @@ from numpy.typing import ArrayLike
 from scipy import special
 from scipy.optimize import least_squares
 
-from vol_risk.calibration.data.transformers import get_atmf_vol
+from vol_risk.calibration.transformers import get_atmf_vol
 from vol_risk.models.black76 import black76_price, black76_vega, implied_vol_jackel
 from vol_risk.models.linear import LinearEquityMarket
 from vol_risk.protocols import EuropeanOption, ModelParams, OptionChainLike
@@ -16,6 +16,8 @@ from vol_risk.util import angles_to_simplex, make_ravel_param, simplex_to_angles
 from vol_risk.vol_surface.surface import VolSmile, VolSurface
 
 log = logging.getLogger(__name__)
+
+SIGMA_MAX = 4.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -264,7 +266,7 @@ BOUNDS_METHODS = {
     "reduced": lambda n, sigma_min: (np.repeat(sigma_min, n), np.repeat(np.inf, n)),
     "full": lambda n, sigma_min: (
         np.concatenate([np.repeat(-np.inf, n - 1), np.repeat(-np.inf, n - 1), np.repeat(sigma_min, n)]),
-        np.concatenate([np.repeat(np.inf, n - 1), np.repeat(np.inf, n - 1), np.repeat(np.inf, n)]),
+        np.concatenate([np.repeat(np.inf, n - 1), np.repeat(np.inf, n - 1), np.repeat(SIGMA_MAX, n)]),
     ),
 }
 
@@ -497,13 +499,21 @@ def _make_smile_fun(params: LogNormMixParams, market: LinearEquityMarket, tau: f
 
         iv = np.empty_like(k_arr, dtype=float)
         for i, (ki, pi) in enumerate(zip(k_arr, prices, strict=True)):
+            price = float(pi)
+            is_call = True
+
+            # Use OTM contracts for increased stability.
+            if ki < fwd:
+                price = max(price - df * (fwd - float(ki)), 0.0)
+                is_call = False
+
             iv[i] = implied_vol_jackel(
-                price=float(pi),
+                price=price,
                 f=fwd,
                 k=float(ki),
                 t=tau_val,
                 df=df,
-                is_call=True,
+                is_call=is_call,
             )
 
         return float(iv[0]) if k_is_scalar else iv
@@ -579,8 +589,12 @@ def calib_mixture_ivs(
             transform_method_ = transform_method
             p0 = _force_mu_to_unit_sum(prev_params, tau)
             lambda_w = 0.01
-            lambda_mu = 0.1
-            lambda_sigma = 0.00
+            lambda_mu = 0.01
+            lambda_sigma = 0.01
+            if "totvar" in transform_method_ and prev_tau is not None:
+                # Adjust sigma to keep total variance constant.
+                scaled_sigma = prev_params.sigma * np.sqrt(prev_tau / tau)
+                p0 = LogNormMixParams(w=p0.w, mu=p0.mu, sigma=scaled_sigma)
 
         if lambda_ca > 0.0 and prev_tau is not None:
             strike_grid = np.linspace(fwd * 0.5, fwd * 1.5, 10)
@@ -623,6 +637,7 @@ def calib_mixture_ivs(
         params[t] = {
             "tau": tau,
             "params": fitted,
+            "stats": stats,
         }
 
     return VolSurface(np.array(taus, dtype=float), smiles), params
