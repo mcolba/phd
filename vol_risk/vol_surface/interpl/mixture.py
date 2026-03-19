@@ -18,6 +18,7 @@ from vol_risk.vol_surface.surface import VolSmile, VolSurface
 log = logging.getLogger(__name__)
 
 SIGMA_MAX = 4.0
+SIGMA_MIN = 0.03
 
 
 @dataclass(frozen=True, slots=True)
@@ -344,11 +345,21 @@ def _smirk_start_guess(n: int, sigma_atm: float, tau: float) -> LogNormMixParams
         msg = "Number of components must be at least 2."
         raise ValueError(msg)
 
-    w0 = np.repeat(1 / n, n)
-    mu_min = np.exp(-0.30 * tau)
-    mu_max = 2 - mu_min
-    mu0 = np.log(np.linspace(mu_min, mu_max, n)) / tau
-    sigma0 = piecewise_linspace([sigma_atm * 2, sigma_atm, sigma_atm * 1.5], n)
+    # Assign smaller weight to the leftmost component
+    w_left = 1 / (n * 3)
+    w_right = np.repeat((1 - w_left) / (n - 1), n - 1)
+    w0 = np.concatenate(([w_left], w_right))
+
+    # Assignincreasing mu values
+    exp_mu_min = 0.85
+    exp_mu_left = np.linspace(exp_mu_min, 1, n - 1)
+    partial_sum = np.dot(w0[:-1], exp_mu_left)
+    exp_mu_right = (1 - partial_sum) / w0[-1]
+    mu0 = np.log(np.concatenate([exp_mu_left, [exp_mu_right]])) / tau
+
+    # Assign decreasing sigma values
+    sigma0 = np.clip(piecewise_linspace([sigma_atm * 3, sigma_atm, sigma_atm * 0.5], n), SIGMA_MIN, SIGMA_MAX)
+
     return LogNormMixParams(w0, mu0, sigma0)
 
 
@@ -359,9 +370,9 @@ def _uninformative_start_guess(n: int, sigma_atm: float, tau: float) -> LogNormM
         raise ValueError(msg)
 
     w0 = np.repeat(1 / n, n)
-    mu_min = np.exp(-0.30 * tau)
-    mu_max = 2 - mu_min
-    mu0 = np.log(np.linspace(mu_min, mu_max, n)) / tau
+    exp_mu_min = 0.85
+    exp_mu_max = 2 - exp_mu_min
+    mu0 = np.log(np.linspace(exp_mu_min, exp_mu_max, n)) / tau
     sigma0 = np.repeat(sigma_atm, n)
     return LogNormMixParams(w0, mu0, sigma0)
 
@@ -393,7 +404,7 @@ def calib_mixture_smile(
         msg = f"Unsupported transform method: {transform_method}"
         raise ValueError(msg)
 
-    min_vol = 0.0 if "totvar" in transform_method else 0.05
+    min_vol = 0.0 if "totvar" in transform_method else SIGMA_MIN
 
     encoder = BIJECTION_METHODS[transform_method](float(tau))
     x0, unravel = make_ravel_param(p0, encoder, check_unravel=False)
@@ -576,7 +587,7 @@ def calib_mixture_ivs(
 
         if prev_params is None:
             p0 = _smirk_start_guess(n_components, sigma_atm=sigma_atm, tau=tau)
-            # p0 = _uninformative_start_guess(n_components, sigma_atm=sigma_atm, tau=tau_val)
+            # p0 = _uninformative_start_guess(n_components, sigma_atm=sigma_atm, tau=tau)
             lambda_w = 0.0
             lambda_mu = 0.0
             lambda_sigma = 0.0
@@ -637,10 +648,9 @@ def calib_mixture_ivs(
         params[t] = {
             "tau": tau,
             "params": fitted,
-            "stats": stats,
         }
 
-    return VolSurface(np.array(taus, dtype=float), smiles), params
+    return VolSurface(np.array(taus, dtype=float), smiles), params, stats
 
 
 def gaussian_pdf(x: ArrayLike, mu: ArrayLike, sigma: ArrayLike) -> np.ndarray:

@@ -1,8 +1,9 @@
+import logging
 from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
-from arbitragerepair import detect as arbitragerepair_detect
+from arbitragerepair import constraints
 from arbitragerepair.repair import matrix, solvers
 from scipy.interpolate import RBFInterpolator
 
@@ -10,6 +11,8 @@ from vol_risk.calibration.option_chain import OptionChain, OptionSlice
 from vol_risk.models.black76 import black76_price, implied_vol_jackel
 from vol_risk.models.linear import LinearEquityMarket
 from vol_risk.vol_surface.moneyness import DeltaMoneyness, Moneyness
+
+log = logging.getLogger(__name__)
 
 
 def _as_float_array(x: np.ndarray | float) -> np.ndarray:
@@ -121,34 +124,34 @@ def _evaluate_total_variance_surface(
     return np.asarray(spline(scaled_coords), dtype=float).reshape(tau_arr.shape)
 
 
-def _normalise_quotes_for_repair(
-    tau: np.ndarray,
-    strike: np.ndarray,
-    undiscounted_call: np.ndarray,
-    forward: np.ndarray,
-    min_price: float | None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    df = pd.DataFrame(
-        {
-            "idx": np.arange(tau.size, dtype=int),
-            "tau": tau,
-            "strike": strike,
-            "price": undiscounted_call,
-            "forward": forward,
-        }
-    ).sort_values(["tau", "strike"], kind="stable")
+# def _normalise_quotes_for_repair(
+#     tau: np.ndarray,
+#     strike: np.ndarray,
+#     undiscounted_call: np.ndarray,
+#     forward: np.ndarray,
+#     min_price: float | None,
+# ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+#     df = pd.DataFrame(
+#         {
+#             "idx": np.arange(tau.size, dtype=int),
+#             "tau": tau,
+#             "strike": strike,
+#             "price": undiscounted_call,
+#             "forward": forward,
+#         }
+#     ).sort_values(["tau", "strike"], kind="stable")
 
-    mask = ~df["price"].isna()
-    if min_price is not None:
-        mask &= df["price"] >= min_price
-    df = df.loc[mask].copy()
+#     mask = ~df["price"].isna()
+#     if min_price is not None:
+#         mask &= df["price"] >= min_price
+#     df = df.loc[mask].copy()
 
-    idx = df["idx"].to_numpy(dtype=int)
-    tau_norm = df["tau"].to_numpy(dtype=float)
-    strike_norm = (df["strike"] / df["forward"]).to_numpy(dtype=float)
-    price_norm = (df["price"] / df["forward"]).to_numpy(dtype=float)
-    forward_ord = df["forward"].to_numpy(dtype=float)
-    return tau_norm, strike_norm, price_norm, idx, forward_ord
+#     idx = df["idx"].to_numpy(dtype=int)
+#     tau_norm = df["tau"].to_numpy(dtype=float)
+#     strike_norm = (df["strike"] / df["forward"]).to_numpy(dtype=float)
+#     price_norm = (df["price"] / df["forward"]).to_numpy(dtype=float)
+#     forward_ord = df["forward"].to_numpy(dtype=float)
+#     return tau_norm, strike_norm, price_norm, idx, forward_ord
 
 
 def _solve_weighted_l1_repair(
@@ -158,7 +161,11 @@ def _solve_weighted_l1_repair(
     weights: np.ndarray,
     solver: str = "glpk",
 ) -> np.ndarray:
+    """Weighted version of the l1() arbitrage repair in arbitragerepair.repair."""
     n_quote = mat_a.shape[1]
+    MAX_ATTEMPTS = 1
+    sol = []
+
     if price.shape[0] != n_quote or weights.shape[0] != n_quote:
         msg = "mat_a, price, and weights must agree on the number of quotes."
         raise ValueError(msg)
@@ -166,83 +173,50 @@ def _solve_weighted_l1_repair(
         msg = "weights must be strictly positive."
         raise ValueError(msg)
 
-    a = -np.hstack((mat_a, -mat_a))
+    A = -np.hstack((mat_a, -mat_a))
     b = -(vec_b - mat_a.dot(price))
     coeff = np.hstack((weights, weights))
 
-    a1 = np.vstack((a, -np.eye(2 * n_quote)))
+    A1 = np.vstack((A, -np.diag(np.ones(2 * n_quote))))
     b1 = np.hstack((b, np.zeros(2 * n_quote)))
 
-    g = matrix(a1)
+    G = matrix(A1)
     h = matrix(b1)
     c = matrix(coeff)
-    g *= 2.0
+
+    """
+    Scale the constraint for numerical stability
+    A * (scale * epsilon) >= scale * b
+    """
+    G *= 2.0
     h *= 2.0
 
-    max_attempts = 5
     i_attempt = 1
     scale = 0.1
     status = "initial"
-    old_show_progress = solvers.options.get("show_progress", True)
-    solvers.options["show_progress"] = False
-    try:
-        while status != "optimal":
-            scale *= 10
-            c *= scale
-            h *= scale
-            solution = solvers.lp(c, g, h, solver=solver)
-            status = solution["status"]
-            i_attempt += 1
-            if i_attempt > max_attempts:
-                break
-    finally:
-        solvers.options["show_progress"] = old_show_progress
+    while status != "optimal":
+        scale *= 10
+        G *= scale
+        h *= scale
 
-    if status != "optimal":
-        msg = f"Weighted arbitrage repair failed after {max_attempts} attempts."
-        raise RuntimeError(msg)
+        # solve the LP
+        sol = solvers.lp(c, G, h, solver=solver)
+        status = sol["status"]
 
-    x = np.asarray(solution["x"], dtype=float).reshape(-1)
-    epsilon = x[:n_quote] - x[n_quote:]
-    return epsilon / scale
+        i_attempt += 1
+        if i_attempt > MAX_ATTEMPTS:
+            break
 
+    if status == "optimal":
+        x = np.array(sol["x"])
+        epsilon = x[:n_quote] - x[n_quote:]
+        epsilon = epsilon.flatten()
+        epsilon /= scale
+    else:
+        epsilon = []
+        log.warning("Optimal perturbation is not found.")
 
-def detect_arbitrage(
-    chain: OptionChain,
-    market: LinearEquityMarket,
-    min_price: float | None = None,
-    repair_tolerance: float = 0.0,
-) -> dict[str, int]:
-    """Detect static arbitrage breaches on a call-only chain."""
-    _require_call_only(chain)
-
-    tau = _as_float_array(chain.tau)
-    strike = _as_float_array(chain.k)
-    mid = _as_float_array(chain.mid)
-    discount = _as_float_array(market.df(tau))
-    forward = _as_float_array(market.fwd(tau))
-    undiscounted = mid / discount
-
-    tau_norm, strike_norm, price_norm, _, _ = _normalise_quotes_for_repair(
-        tau=tau,
-        strike=strike,
-        undiscounted_call=undiscounted,
-        forward=forward,
-        min_price=min_price,
-    )
-
-    _, _, n_cond, n_breach = arbitragerepair_detect(
-        tau_norm,
-        strike_norm,
-        price_norm,
-        tolerance=repair_tolerance,
-        verbose=False,
-    )
-    return {
-        "n_quotes": int(tau_norm.size),
-        "n_constraints": int(sum(n_cond)),
-        "n_breaches": int(sum(n_breach)),
-    }
+    return epsilon
 
 
 def repair_arbitrage(
@@ -259,53 +233,42 @@ def repair_arbitrage(
     df = chain.df.copy()
     if "synthetic" not in df.columns:
         df["synthetic"] = False
-    else:
-        df["synthetic"] = df["synthetic"].fillna(value=False).astype(bool)
 
     if "repair_adj" not in df.columns:
         df["repair_adj"] = 0.0
-    else:
-        df["repair_adj"] = df["repair_adj"].fillna(0.0).astype(float)
 
     df["repair_weight"] = np.where(df["synthetic"], synthetic_weight, 1.0)
 
     tau = _as_float_array(chain.tau)
     strike = _as_float_array(chain.k)
     mid = _as_float_array(chain.mid)
-    discount = _as_float_array(market.df(tau))
+    disc = _as_float_array(market.df(tau))
     forward = _as_float_array(market.fwd(tau))
-    undiscounted = mid / discount
+    undisc_mid = mid / disc
 
-    tau_norm, strike_norm, price_norm, idx, forward_ord = _normalise_quotes_for_repair(
-        tau=tau,
-        strike=strike,
-        undiscounted_call=undiscounted,
-        forward=forward,
-        min_price=min_price,
-    )
-    if tau_norm.size == 0:
-        return chain.__class__(df, chain._calendar)
+    normaliser = constraints.Normalise(min_price=min_price)
+    normaliser.fit(T=tau, K=strike, C=undisc_mid, F=forward)
+    T1, K1, C1 = normaliser.transform(T=tau, K=strike, C=undisc_mid)
+    mat_A, vec_b, _, _ = constraints.detect(T=T1, K=K1, C=C1, tolerance=tolerance, verbose=False)
 
-    mat_a, vec_b, _, _ = arbitragerepair_detect(
-        tau_norm,
-        strike_norm,
-        price_norm,
-        tolerance=tolerance,
-        verbose=False,
-    )
-    epsilon_norm = _solve_weighted_l1_repair(
-        mat_a=mat_a,
+    epsilon = _solve_weighted_l1_repair(
+        mat_a=mat_A,
         vec_b=vec_b,
-        price=price_norm,
-        weights=df["repair_weight"].to_numpy(dtype=float)[idx],
+        price=C1,
+        weights=df["repair_weight"].to_numpy(dtype=float),
         solver=solver,
     )
 
-    repaired_norm = price_norm + epsilon_norm
-    repaired_mid = repaired_norm * forward_ord * discount[idx]
-    original_mid = df.loc[idx, "mid"].to_numpy(dtype=float)
-    df.loc[idx, "mid"] = repaired_mid
-    df.loc[idx, "repair_adj"] += repaired_mid - original_mid
+    if len(epsilon) == 0:
+        log.warning("No repair applied to the chain.")
+        return chain
+
+    # epsilon2 = repair.l1(mat_A, vec_b, C1)
+    # assert np.allclose(epsilon, epsilon2, atol=1e-10)
+
+    _, C0 = normaliser.inverse_transform(K=K1, C=C1 + epsilon)
+    df.loc[:, "mid"] = C0 * disc
+    df.loc[:, "repair_adj"] = (C0 - undisc_mid) * disc
 
     return chain.__class__(df, chain._calendar)
 
@@ -406,9 +369,6 @@ def append_synthetic_quotes(
         df = pd.concat([df, pd.DataFrame(synthetic_rows)], ignore_index=True)
 
     return chain.__class__(df, chain._calendar)
-
-
-# ========================================= \TO REVIEW ========================================= #
 
 
 def liquidity_filter(

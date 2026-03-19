@@ -76,6 +76,38 @@ def _compute_moneyness(
     return values
 
 
+def _invert_moneyness_to_strike(
+    coord: str,
+    moneyness: np.ndarray,
+    tau: float,
+    le: LinearEquityMarket,
+    surface: VolSurface,
+) -> np.ndarray:
+    """Invert a moneyness grid to strikes using the registered convention."""
+    if coord == "k":
+        return np.asarray(moneyness, dtype=float)
+
+    model_cls = MONEYNESS_REGISTRY.get(coord)
+    if model_cls is None:
+        msg = f"Unsupported moneyness coordinate: {coord}"
+        raise ValueError(msg)
+
+    invert_kwargs = {
+        "moneyness": np.asarray(moneyness, dtype=float),
+        "tau": tau,
+    }
+    if coord in ["slkf", "delta"]:
+        sigma_atm = float(
+            surface.vol(
+                np.asarray([le.fwd(tau)], dtype=float),
+                np.asarray([tau], dtype=float),
+            )[0]
+        )
+        invert_kwargs["sigma"] = sigma_atm
+
+    return np.asarray(model_cls(le).invert(**invert_kwargs), dtype=float)
+
+
 def make_mixture_rnd_function(params: LogNormMixParams, tau: float) -> Callable[[np.ndarray], np.ndarray]:
     """Return the risk-neutral density of log-returns for a log-normal mixture."""
     if tau <= 0.0:
@@ -386,6 +418,7 @@ def plot_iv_3d_surface(
     scatter_size: float = 8.0,
 ) -> None:
     """Plot a 3D implied-vol surface and overlay market IV points."""
+    axis_limits = AXIS_LIMITS.get(coord)
     tau_observed = np.unique(chain.tau)
     if tau_observed.size == 0:
         msg = "chain must contain at least one option quote."
@@ -394,31 +427,53 @@ def plot_iv_3d_surface(
     tau_max = max(float(np.nanmax(tau_observed)), 3.0)
     tau_values = np.linspace(0.05, tau_max, n_maturities)
 
-    strike_min = float(np.nanmin(chain.k))
-    strike_max = float(np.nanmax(chain.k))
-    strike_grid = np.linspace(strike_min, strike_max, n_strikes)
+    strike_grid = None
+    coord_grid = None
+    if axis_limits is None or coord == "k":
+        strike_min = float(np.nanmin(chain.k))
+        strike_max = float(np.nanmax(chain.k))
+        if not np.isfinite(strike_min) or not np.isfinite(strike_max) or strike_min >= strike_max:
+            msg = f"Unable to construct a strike grid within bounds for coordinate '{coord}'."
+            raise ValueError(msg)
+        strike_grid = np.linspace(strike_min, strike_max, n_strikes)
+    else:
+        coord_grid = np.linspace(axis_limits[0], axis_limits[1], n_strikes)
 
     tau_mesh = np.repeat(tau_values[:, None], n_strikes, axis=1)
     coord_mesh = np.empty_like(tau_mesh, dtype=float)
     iv_mesh = np.empty_like(tau_mesh, dtype=float)
 
     for row_idx, tau in enumerate(tau_values):
+        if coord_grid is None:
+            strike_row = strike_grid
+        else:
+            strike_row = _invert_moneyness_to_strike(
+                coord=coord,
+                moneyness=coord_grid,
+                tau=tau,
+                le=lin_mkt,
+                surface=surface,
+            )
+
         tau_row = np.full(n_strikes, tau, dtype=float)
-        iv_row = surface.vol(strike_grid, tau_row)
+        iv_row = surface.vol(strike_row, tau_row)
         iv_mesh[row_idx, :] = iv_row
 
-        sigma = None
-        if coord in ["slkf", "delta"]:
-            fwd_value = float(lin_mkt.fwd(tau))
-            sigma = _select_atm_sigma(k_slice=strike_grid, fwd_value=fwd_value, iv_slice=iv_row)
+        if coord_grid is not None:
+            coord_mesh[row_idx, :] = coord_grid
+        else:
+            sigma = None
+            if coord in ["slkf", "delta"]:
+                fwd_value = float(lin_mkt.fwd(tau))
+                sigma = _select_atm_sigma(k_slice=strike_row, fwd_value=fwd_value, iv_slice=iv_row)
 
-        coord_mesh[row_idx, :] = _compute_moneyness(
-            coord=coord,
-            strikes=strike_grid,
-            tau_vec=tau_row,
-            le=lin_mkt,
-            sigma=sigma,
-        )
+            coord_mesh[row_idx, :] = _compute_moneyness(
+                coord=coord,
+                strikes=strike_row,
+                tau_vec=tau_row,
+                le=lin_mkt,
+                sigma=sigma,
+            )
 
     valid_surface = np.isfinite(tau_mesh) & np.isfinite(coord_mesh) & np.isfinite(iv_mesh) & (iv_mesh > 0.0)
     if not np.any(valid_surface):
@@ -453,6 +508,9 @@ def plot_iv_3d_surface(
 
     market_df = pd.concat(market_frames, ignore_index=True)
     valid_market = np.isfinite(market_df["moneyness"]) & np.isfinite(market_df["iv_mid"])
+    if axis_limits is not None:
+        lower_bound, upper_bound = axis_limits
+        valid_market &= (market_df["moneyness"] >= lower_bound) & (market_df["moneyness"] <= upper_bound)
     synthetic_mask = market_df.get("is_synthetic", pd.Series(False, index=market_df.index)).to_numpy(dtype=bool)
     point_styles = [
         (~synthetic_mask, "black"),
@@ -478,8 +536,8 @@ def plot_iv_3d_surface(
     ax.set_ylabel(AXIS_LABELS.get(coord, "Moneyness"))
     ax.set_zlabel("Implied volatility")
 
-    if coord in AXIS_LIMITS:
-        ax.set_ylim(*AXIS_LIMITS[coord])
+    if axis_limits is not None:
+        ax.set_ylim(*axis_limits)
 
     z_max = float(np.ma.max(iv_mesh))
     if np.any(valid_market):
@@ -557,5 +615,5 @@ def plot_iv_slice(
     if coord in AXIS_LIMITS:
         ax.set_xlim(*AXIS_LIMITS[coord])
 
-    ax.set_ylim(0.0, 0.6)
+    ax.set_ylim(0.0, 0.8)
     ax.set_title(f"T={expiry.date()} (tau={sl.slice_tau:.2f})", fontsize=8)

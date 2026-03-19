@@ -9,7 +9,7 @@ from numpy.typing import ArrayLike
 from scipy.interpolate import interp1d
 from sklearn.linear_model import LinearRegression
 
-from vol_risk.calibration.data.option_chain import OptionChain
+from vol_risk.calibration.option_chain import OptionChain
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class LinearEquityParams:
     """Data class to hold the parameters of a linear equity market model."""
+
     tau: np.ndarray
     r: np.ndarray
     q: np.ndarray
@@ -180,9 +181,25 @@ def calib_linear_equity_market(opt: OptionChain, axes=None) -> tuple[LinearEquit
 
     for i, (t, sl) in enumerate(opt):
         pc_df = put_call_df(sl)
+        K = pc_df["strike"].to_numpy(dtype=float).reshape(-1, 1)
+        y = pc_df["g_mid"].to_numpy(dtype=float)
 
-        if pc_df.shape[0] < 10:
-            msg = f"Maturity {t} has less than 10 observables. It will be skipped."
+        # Plot put-call differences scatter
+        if axes is not None:
+            moneyness = K.ravel() / opt.spot
+            lb = pc_df["g_min"].to_numpy(dtype=float)
+            ub = pc_df["g_max"].to_numpy(dtype=float)
+            axes[i].fill_between(x=moneyness, y1=lb, y2=ub, color="lightgray", alpha=0.5)
+            axes[i].scatter(moneyness, y, color="blue", s=20, label="C-P")
+            axes[i].text(
+                0.05,
+                0.05,
+                f"T={t.date()} (tau = {sl.tau[0]:.2f})",
+                transform=axes[i].transAxes,
+            )
+
+        if pc_df.shape[0] < 8:
+            msg = f"Maturity {t} has less than 8 observables. It will be skipped."
             logger.info(msg)
             stats[t] = {
                 "coeff": (np.nan, np.nan),
@@ -193,10 +210,6 @@ def calib_linear_equity_market(opt: OptionChain, axes=None) -> tuple[LinearEquit
             }
             valid_idx[i] = False
             continue
-
-        # Calculate P - C and perform linear regression against strike (K)
-        K = pc_df["strike"].to_numpy().reshape(-1, 1)
-        y = pc_df["g_mid"].to_numpy()
 
         # Fit linear regression
         lr = LinearRegression(fit_intercept=True).fit(X=-K, y=y)
@@ -210,23 +223,18 @@ def calib_linear_equity_market(opt: OptionChain, axes=None) -> tuple[LinearEquit
 
         # check if fitted line is within bid-ask bounds
         fitted = lr.predict(-K)
-        in_bid_ask_t = np.all((fitted >= pc_df["g_min"]) & (fitted <= pc_df["g_max"]))
+        in_bid_ask_t = (fitted >= pc_df["g_min"]) & (fitted <= pc_df["g_max"])
 
-        if not in_bid_ask_t:
-            msg = f"Fitted line for maturity {t} is not within the put-call bid-ask bounds."
+        if (in_bid_ask_t == False).sum() / len(pc_df) > 0.3:
+            msg = (
+                f"Fitted line for maturity {t} is not within the put-call bid-ask bounds "
+                f"for more than 30% of the strikes."
+            )
             logger.warning(msg)
 
+        # Plot fitted line
         if axes is not None:
-            moneyness = K.ravel() / opt.spot
             axes[i].plot(moneyness, fitted, color="orange")
-            axes[i].fill_between(moneyness, pc_df["g_min"], pc_df["g_max"], color="lightgray", alpha=0.5)
-            axes[i].scatter(moneyness, y, color="blue", s=20, label="C-P")
-            axes[i].text(
-                0.05,
-                0.05,
-                f"T={t.date()} (τ= {sl.tau[0]:.2f})",
-                transform=axes[i].transAxes,
-            )
 
         # Append results
         tau[i] = sl.tau[0]
@@ -235,7 +243,7 @@ def calib_linear_equity_market(opt: OptionChain, axes=None) -> tuple[LinearEquit
         stats[t] = {
             "coeff": (alpha_t, beta_t),
             "n_obs": int(pc_df.shape[0]),
-            "in_bid_ask": bool(in_bid_ask_t),
+            "in_bid_ask": in_bid_ask_t,
             "tau": float(tau[i]),
             "excluded": not valid_idx[i],
         }

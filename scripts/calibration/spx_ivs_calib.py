@@ -55,19 +55,21 @@ log = logging.getLogger(__name__)
 
 TICKER = "SPX"
 
+epsilon = 1e-7
+cutoff_cfg = ChainCutoff("delta", (epsilon, 1.0 - epsilon))
 CALIB_CONFIG = MixtureCalibConfig(
     n_components=3,
     lw_type="vega",
     transform_method="totvar_simplex",
     repair_arbitrage=True,
     filters=ChainFilter(
-        oi_min=5,
+        oi_min=50,
         bid_min=0.01,
         mid_min=0.02,
         rel_bid_ask_max=1.0,
         min_k_per_slice=10,
         min_ttm=10,
-        cutoff=None,
+        cutoff=cutoff_cfg,
     ),
 )
 
@@ -85,6 +87,7 @@ def main() -> None:
         for t in tqdm(dates_str, desc="Calibrating", unit="date", dynamic_ncols=True):
             key = f"{TICKER}_{dt.datetime.fromisoformat(t).strftime(r'%Y%m%d')}"
             log.info("Calibrating %s", key)
+
             try:
                 df = dataset.to_table(
                     filter=ds.field("date") == t,
@@ -96,7 +99,11 @@ def main() -> None:
 
                 chain = make_optionmetrics_chain(df)
                 result = run_mixture_pipeline(chain, CALIB_CONFIG)
-                db[key] = result.params
+                db[key] = {
+                    "date": dt.datetime.fromisoformat(t).date(),
+                    "params": result.params,
+                    "stats": result.stats,
+                }
 
             except Exception:
                 log.exception("Failed to calibrate %s", key)

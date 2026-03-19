@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING
 from vol_risk.calibration.transformers import (
     append_synthetic_quotes,
     apply_cutoffs,
-    detect_arbitrage,
     liquidity_filter,
     make_otm_to_call,
     repair_arbitrage,
@@ -54,13 +53,13 @@ class ChainFilter:
         cutoff: Optional moneyness cutoff config. None disables cutoffs.
     """
 
-    oi_min: int = 3
+    oi_min: int = 50
     bid_min: float = 0.01
     mid_min: float = 0.02
     rel_bid_ask_max: float | None = None
     min_ttm: int | None = None
     cutoff: ChainCutoff | None = None
-    min_k_per_slice: int = 3
+    min_k_per_slice: int = 5
 
 
 @dataclass(frozen=True)
@@ -178,7 +177,7 @@ def run_mixture_pipeline(
 
     # 5. Optionally augment each smile with synthetic thin-plate quotes
     chain_calib = chain_otm
-    if config.thin_plate_preprocess is not None:
+    if config.thin_plate_preprocess:
         preprocess_cfg = config.thin_plate_preprocess
         chain_calib = append_synthetic_quotes(
             chain=chain_otm,
@@ -198,7 +197,7 @@ def run_mixture_pipeline(
             synthetic_count,
         )
 
-    if config.repair_arbitrage is not None:
+    if config.repair_arbitrage:
         chain_calib = repair_arbitrage(
             chain=chain_calib,
             market=lin_mkt,
@@ -208,22 +207,8 @@ def run_mixture_pipeline(
         )
         log.info("Options after arbitrage repair: %d", len(chain_calib))
 
-    arbitrage_stats = detect_arbitrage(
-        chain=chain_calib,
-        market=lin_mkt,
-        repair_tolerance=1e-6,
-        min_price=1e-6,
-    )
-    if arbitrage_stats["n_breaches"] > 0:
-        log.warning(
-            "Static arbitrage check after preprocessing found %d breaches across %d constraints for %d quotes.",
-            arbitrage_stats["n_breaches"],
-            arbitrage_stats["n_constraints"],
-            arbitrage_stats["n_quotes"],
-        )
-
     # 6. Calibrate log-normal mixture for each expiry slice
-    surface, ivs_params = calib_mixture_ivs(
+    surface, ivs_params, ivs_stats = calib_mixture_ivs(
         opt=chain_calib,
         mkt=lin_mkt,
         n_components=config.n_components,
@@ -238,7 +223,7 @@ def run_mixture_pipeline(
         surface=surface,
         lin_mkt=lin_mkt,
         params=(lin_mkt_params, ivs_params),
-        stats=lin_stats,
+        stats=(lin_stats, ivs_stats),
         chain_otm=chain_otm,
         chain_calib=chain_calib,
     )
