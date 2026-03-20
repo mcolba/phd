@@ -225,10 +225,10 @@ def calib_linear_equity_market(opt: OptionChain, axes=None) -> tuple[LinearEquit
         fitted = lr.predict(-K)
         in_bid_ask_t = (fitted >= pc_df["g_min"]) & (fitted <= pc_df["g_max"])
 
-        if (in_bid_ask_t == False).sum() / len(pc_df) > 0.3:
+        if (in_bid_ask_t == False).sum() / len(pc_df) > 0.5:
             msg = (
                 f"Fitted line for maturity {t} is not within the put-call bid-ask bounds "
-                f"for more than 30% of the strikes."
+                f"for more than 50% of the strikes."
             )
             logger.warning(msg)
 

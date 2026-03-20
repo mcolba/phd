@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextvars
 import datetime as dt
 import logging
 import shelve
@@ -22,14 +23,24 @@ LOG_FILE_PATH = PROJECT_ROOT / "results" / "logging" / "spx_ivs_calib.log"
 INPUT_PATH = Path(r"D:\option_metrics\parquet")
 OUTPUT_PATH = PROJECT_ROOT / "data" / "derived" / "mixture"
 
+run_key = contextvars.ContextVar("krun_keyey", default="-")
+
+
+class ContextFilter(logging.Filter):
+    def filter(self, record):
+        record.run_key = run_key.get()
+        return True
+
+
 file_handler = logging.FileHandler(LOG_FILE_PATH, mode="w")
-file_handler.setLevel(logging.INFO)
+file_handler.setLevel(logging.WARNING)
 file_handler.setFormatter(
     logging.Formatter(
-        fmt="%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s",
+        fmt="%(asctime)s [%(run_key)s] - %(levelname)s - %(filename)s:%(lineno)d - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 )
+file_handler.addFilter(ContextFilter())
 
 
 class TqdmLoggingHandler(logging.Handler):
@@ -42,7 +53,8 @@ class TqdmLoggingHandler(logging.Handler):
 
 stream_handler = TqdmLoggingHandler()
 stream_handler.setLevel(logging.WARNING)
-stream_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+stream_handler.setFormatter(logging.Formatter("%(asctime)s [%(run_key)s] - %(levelname)s - %(message)s"))
+stream_handler.addFilter(ContextFilter())
 
 logging.basicConfig(
     level=logging.INFO,
@@ -86,6 +98,7 @@ def main() -> None:
     with shelve.open(str(OUTPUT_PATH)) as db:
         for t in tqdm(dates_str, desc="Calibrating", unit="date", dynamic_ncols=True):
             key = f"{TICKER}_{dt.datetime.fromisoformat(t).strftime(r'%Y%m%d')}"
+            run_key.set(key)
             log.info("Calibrating %s", key)
 
             try:
