@@ -35,6 +35,7 @@ Makefile
 .venv/
 
 # === Exclude folders ===
+data/
 _temp/
 _deprecated/
 third_party/heston/backup/
