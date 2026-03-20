@@ -18,7 +18,7 @@ from vol_risk.vol_surface.surface import VolSmile, VolSurface
 log = logging.getLogger(__name__)
 
 SIGMA_MAX = 4.0
-SIGMA_MIN = 0.03
+SIGMA_MIN = 0.05
 THETA_EPSILON = 0.0001
 
 
@@ -389,19 +389,20 @@ def calib_mixture_smile(
     mkt_prices: np.ndarray,
     loss_weights: ArrayLike = 1,
     p0: LogNormMixParams | None = None,
-    lambda_rough: float = 0.0,
+    lambda_smoothing: float = 0.0,
     prev_params: LogNormMixParams | None = None,
-    transform_method: str = "base",
+    transform_method: str = "simplex",
     lambda_w: float = 0.0,
     lambda_mu: float = 0.0,
     lambda_sigma: float = 0.0,
     pdef: float = 0.0,
     lambda_ca: float = 0.0,
     no_arb_data: np.ndarray | None = None,
+    sigma_atm: float = 0.2,
 ) -> np.ndarray:
     """Calibrate a log-normal mixture model to option prices."""
     if p0 is None:
-        p0 = _uninformative_start_guess(n, sigma_atm=0.2, tau=float(tau))
+        p0 = _uninformative_start_guess(n, sigma_atm=sigma_atm, tau=float(tau))
 
     if transform_method not in BIJECTION_METHODS:
         msg = f"Unsupported transform method: {transform_method}"
@@ -437,10 +438,10 @@ def calib_mixture_smile(
 
         weights = np.broadcast_to(loss_weights, mkt_prices.shape)
 
-        if lambda_rough > 0.0:
-            penalty = np.sqrt(softplus(excess_roughness(param), beta=0.1))
+        if lambda_smoothing > 0.0:
+            penalty = np.sqrt(softplus(excess_roughness(param, sigma_atm=sigma_atm), beta=0.1))
             residuals = np.concatenate([residuals, np.array([penalty])])
-            weights = np.concatenate([weights, np.array([lambda_rough])])
+            weights = np.concatenate([weights, np.array([lambda_smoothing])])
 
         if lambda_w > 0.0 and prev_params is not None:
             delta_w = param.w - prev_params.w
@@ -543,6 +544,7 @@ def calib_mixture_ivs(
     pdef: float = 0.0,
     x0: LogNormMixParams | None = None,
     transform_method: str = "base",
+    lambda_smoothing: float = 0.0,
 ) -> tuple[VolSurface, LogNormMixParams]:
     """Calibrate a log-normal mixture model to each expiry slice."""
     lambda_ca = 0.0
@@ -642,6 +644,8 @@ def calib_mixture_ivs(
             transform_method=transform_method_,
             no_arb_data=no_arb_data,
             lambda_ca=lambda_ca,
+            lambda_smoothing=lambda_smoothing,
+            sigma_atm=sigma_atm,
         )
 
         prev_params = fitted

@@ -17,6 +17,14 @@ def _ask_ge_bid_if_present(df: pd.DataFrame) -> bool:
     return bool((df.loc[mask, "ask"] >= df.loc[mask, "bid"]).all())
 
 
+def _expiry_ge_anchor(df: pd.DataFrame) -> bool:
+    """Check that expiry >= anchor for all rows.
+
+    Time information is omitted as PM options might not have a timestamp attached.
+    """
+    return bool((df["expiry"].dt.date >= df["anchor"].dt.date).all())
+
+
 option_chain_schema = DataFrameSchema(
     columns={
         "anchor": Column(pa.DateTime, required=True),
@@ -24,13 +32,13 @@ option_chain_schema = DataFrameSchema(
         "strike": Column(float, Check.ge(0), required=True),
         "expiry": Column(pa.DateTime, required=True),
         "mid": Column(float, required=True),
-        "volume": Column(int, required=True),
+        "volume": Column("Int64", required=True, nullable=True),
         "option_type": Column(str, Check.isin(["C", "P"]), required=True),
         "bid": Column(float, required=True, nullable=True),
         "ask": Column(float, required=True, nullable=True),
     },
     checks=[
-        Check(lambda df: df["expiry"] >= df["anchor"], error="expiry must be >= anchor"),
+        Check(_expiry_ge_anchor, error="expiry must be >= anchor"),
         Check(lambda df: df["spot"].nunique() == 1, error="all spot values must be the same"),
         Check(lambda df: df["anchor"].nunique() == 1, error="OptionChain must have a single anchor date"),
         Check(_ask_ge_bid_if_present, error="ask must be >= bid"),

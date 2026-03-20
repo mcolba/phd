@@ -97,6 +97,7 @@ class MixtureCalibConfig:
     filters: ChainFilter = field(default_factory=ChainFilter)
     thin_plate_preprocess: ThinPlateSmilePreprocess | None = None
     repair_arbitrage: bool = False
+    lambda_smoothing: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -212,6 +213,7 @@ def run_mixture_pipeline(
         lw_type=config.lw_type,
         transform_method=config.transform_method,
         pdef=config.pdef,
+        lambda_smoothing=config.lambda_smoothing,
     )
 
     log.info("Calibration complete. Expiries calibrated: %d", len(ivs_params))

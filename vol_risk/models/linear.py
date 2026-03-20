@@ -13,6 +13,8 @@ from vol_risk.calibration.option_chain import OptionChain
 
 logger = logging.getLogger(__name__)
 
+N_MIN = 8
+
 
 @dataclass(frozen=True)
 class LinearEquityParams:
@@ -68,6 +70,11 @@ def make_raw_interpolator(
     """
     tau = np.squeeze(np.asarray(tau))
     r = np.squeeze(np.asarray(r))
+
+    if tau.size == 1 and r.size == 1:
+        msg = "Need at least two points for raw interpolation. Returning a flat curve."
+        logger.warning(msg)
+        return lambda x: np.full_like(x, r, dtype=float)
 
     if tau.ndim != 1 or r.ndim != 1:
         msg = "tau and r must be 1-dimensional arrays."
@@ -198,8 +205,8 @@ def calib_linear_equity_market(opt: OptionChain, axes=None) -> tuple[LinearEquit
                 transform=axes[i].transAxes,
             )
 
-        if pc_df.shape[0] < 8:
-            msg = f"Maturity {t} has less than 8 observables. It will be skipped."
+        if pc_df.shape[0] < N_MIN:
+            msg = f"Maturity {t} has less than {N_MIN} observables. It will be skipped."
             logger.info(msg)
             stats[t] = {
                 "coeff": (np.nan, np.nan),
