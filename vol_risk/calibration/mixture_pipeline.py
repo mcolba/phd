@@ -168,9 +168,6 @@ def run_mixture_pipeline(
     # 4. Optionally apply moneyness cutoffs
     if filt_cfg.cutoff is not None:
         cutoff_cfg = filt_cfg.cutoff
-        if cutoff_cfg.moneyness_type not in MONEYNESS_REGISTRY:
-            msg = f"Unknown moneyness_type {cutoff_cfg.moneyness_type!r}. Available: {list(MONEYNESS_REGISTRY)}"
-            raise ValueError(msg)
         moneyness = MONEYNESS_REGISTRY[cutoff_cfg.moneyness_type](le=lin_mkt)
         chain_otm = apply_cutoffs(chain_otm, moneyness=moneyness, bounds=cutoff_cfg.bounds)
         log.info("Options after cutoff filter: %d", len(chain_otm))

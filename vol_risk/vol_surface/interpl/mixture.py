@@ -19,6 +19,7 @@ log = logging.getLogger(__name__)
 
 SIGMA_MAX = 4.0
 SIGMA_MIN = 0.03
+THETA_EPSILON = 0.0001
 
 
 @dataclass(frozen=True, slots=True)
@@ -266,8 +267,10 @@ BIJECTION_FALLBACK = {
 BOUNDS_METHODS = {
     "reduced": lambda n, sigma_min: (np.repeat(sigma_min, n), np.repeat(np.inf, n)),
     "full": lambda n, sigma_min: (
-        np.concatenate([np.repeat(-np.inf, n - 1), np.repeat(-np.inf, n - 1), np.repeat(sigma_min, n)]),
-        np.concatenate([np.repeat(np.inf, n - 1), np.repeat(np.inf, n - 1), np.repeat(SIGMA_MAX, n)]),
+        np.concatenate([np.repeat(0 + THETA_EPSILON, n - 1), np.repeat(-np.inf, n - 1), np.repeat(sigma_min, n)]),
+        np.concatenate(
+            [np.repeat(np.pi / 2 - THETA_EPSILON, n - 1), np.repeat(np.inf, n - 1), np.repeat(SIGMA_MAX, n)]
+        ),
     ),
 }
 
@@ -481,7 +484,7 @@ def calib_mixture_smile(
     )
 
     if not res.success:
-        msg = f"Log-normal mixture calibration did not converge: {res.message}"
+        msg = f"Log-normal mixture calibration did not converge for tau={float(tau):.2f}): {res.message}"
         log.warning(msg)
 
     return unravel(res.x), {"error": res.fun[: len(mkt_prices)]}

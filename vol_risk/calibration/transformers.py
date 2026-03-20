@@ -25,7 +25,7 @@ def _as_scalar(x: np.ndarray | float) -> float:
 
 def _require_call_only(chain: OptionChain) -> None:
     if not np.all(chain.option_type == "C"):
-        msg = "Synthetic quote augmentation expects a call-only chain. Use make_otm_to_call first."
+        msg = "Function expects a call-only chain. Use make_otm_to_call first."
         raise ValueError(msg)
 
 
@@ -417,7 +417,7 @@ def make_otm_to_call(chain: OptionChain, le: LinearEquityMarket) -> OptionChain:
     tau = chain.tau
 
     is_otm_c = (df["option_type"] == "C") & (df["strike"] >= le.fwd(tau))
-    is_otm_p = (df["option_type"] == "P") & (df["strike"] <= le.fwd(tau))
+    is_otm_p = (df["option_type"] == "P") & (df["strike"] < le.fwd(tau))
 
     calls = df.loc[is_otm_c, :]
 
@@ -437,15 +437,15 @@ def make_otm_to_call(chain: OptionChain, le: LinearEquityMarket) -> OptionChain:
     return chain.__class__(pd.concat([calls, puts], ignore_index=True), chain._calendar)
 
 
-def get_atmf_vol(chain: OptionSlice, le: LinearEquityMarket) -> float:
+def get_atmf_vol(sl: OptionSlice, le: LinearEquityMarket) -> float:
     """Get ATMF volatilities from an option chain."""
-    otm_chain = make_otm_to_call(chain, le)
-    tau = otm_chain.slice_tau
+    _require_call_only(sl)
+    tau = sl.slice_tau
     fwd = le.fwd(tau)
 
-    idx_sort = np.argsort(otm_chain.k)
-    strike = otm_chain.k[idx_sort]
-    price = otm_chain.mid[idx_sort]
+    idx_sort = np.argsort(sl.k)
+    strike = sl.k[idx_sort]
+    price = sl.mid[idx_sort]
 
     k = 3
     idx_closest = np.searchsorted(strike, fwd)
