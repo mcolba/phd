@@ -22,6 +22,7 @@ def register_moneyness(key: str):
 
 
 @register_moneyness("base")
+@register_moneyness("k")
 @dataclass(frozen=True)
 class Moneyness(ABC):
     """Abstract base class for moneyness calculations."""

@@ -491,11 +491,11 @@ def calib_mixture_smile(
     return unravel(res.x), {"error": res.fun[: len(mkt_prices)]}
 
 
-def _make_smile_fun(params: LogNormMixParams, market: LinearEquityMarket, tau: float, pdef: float = 0.0) -> VolSmile:
-    tau_val = float(tau)
-    tau_vec = np.array([tau_val], dtype=float)
-    df = float(market.df(tau_vec)[0])
-    fwd = float(market.fwd(tau_vec)[0])
+def _make_smile_fun(params: LogNormMixParams, le: LinearEquityMarket, tau: float, pdef: float = 0.0) -> VolSmile:
+    """Construct a VolSmile object from calibrated log-normal mixture parameters."""
+    tau = float(tau)
+    df = le.df(tau)
+    fwd = le.fwd(tau)
 
     def fun(k: np.ndarray | float) -> np.ndarray | float:
         k_is_scalar = np.isscalar(k)
@@ -508,7 +508,7 @@ def _make_smile_fun(params: LogNormMixParams, market: LinearEquityMarket, tau: f
             DF=df,
             F=fwd,
             K=k_arr,
-            tau=tau_val,
+            tau=tau,
             pdef=pdef,
         )
 
@@ -526,7 +526,7 @@ def _make_smile_fun(params: LogNormMixParams, market: LinearEquityMarket, tau: f
                 price=price,
                 f=fwd,
                 k=float(ki),
-                t=tau_val,
+                t=tau,
                 df=df,
                 is_call=is_call,
             )

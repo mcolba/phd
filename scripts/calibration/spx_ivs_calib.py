@@ -23,7 +23,7 @@ LOG_FILE_PATH = PROJECT_ROOT / "results" / "logging" / "spx_ivs_calib.log"
 INPUT_PATH = Path(r"D:\option_metrics\parquet")
 OUTPUT_PATH = PROJECT_ROOT / "data" / "derived" / "mixture"
 
-run_key = contextvars.ContextVar("krun_keyey", default="-")
+run_key = contextvars.ContextVar("run_key", default="-")
 
 
 class ContextFilter(logging.Filter):
@@ -65,25 +65,30 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-TICKER = "SPX"
+# ================================================== Configuration =================================================== #
 
-epsilon = 1e-7
+TICKER = "SPX"
+OVEWRITE_EXISTING = False
+
+epsilon = 1e-8
 cutoff_cfg = ChainCutoff("delta", (epsilon, 1.0 - epsilon))
 CALIB_CONFIG = MixtureCalibConfig(
     n_components=3,
     lw_type="vega",
     transform_method="totvar_simplex",
-    repair_arbitrage=True,
+    repair_arbitrage=False,
+    lambda_smoothing=0,
     filters=ChainFilter(
         oi_min=50,
         bid_min=0.01,
         mid_min=0.02,
-        rel_bid_ask_max=1.0,
+        rel_bid_ask_max=0.5,
         min_k_per_slice=10,
         min_ttm=10,
         cutoff=cutoff_cfg,
     ),
 )
+# # ================================================================================================================== #
 
 
 def main() -> None:
@@ -99,6 +104,11 @@ def main() -> None:
         for t in tqdm(dates_str, desc="Calibrating", unit="date", dynamic_ncols=True):
             key = f"{TICKER}_{dt.datetime.fromisoformat(t).strftime(r'%Y%m%d')}"
             run_key.set(key)
+
+            if key in db and not OVEWRITE_EXISTING:
+                log.info("Results for %s already exist, skipping", key)
+                continue
+
             log.info("Calibrating %s", key)
 
             try:

@@ -3,6 +3,8 @@ from collections.abc import Callable, Iterable
 
 import numpy as np
 
+from vol_risk.models.linear import LinearEquityMarket
+
 
 # @dataclass(frozen=True)
 class Extrapolator(ABC):
@@ -44,7 +46,7 @@ class VolSmile:
         self._interpolator = interpl
         self._extrapolator = extrapl
 
-    def vol(self, k) -> np.array:
+    def vol(self, k: np.ndarray) -> np.ndarray:
         """Get vol for given strikes k and moneyness convention."""
         return self._extrapolator(self._interpolator)(k)
 
@@ -52,12 +54,31 @@ class VolSmile:
 class VolSurface:
     """Vol surface object wrapping multiple VolSmiles slices."""
 
-    def __init__(self, taus: np.array, smiles: Iterable[VolSmile]) -> None:
+    def __init__(self, taus: np.array, smiles: Iterable[VolSmile], linear_model: LinearEquityMarket = None) -> None:
         """Initialize the surface with a mapping tau -> VolSmile."""
         self._taus = np.asarray(taus)
         self._smiles = smiles
+        self._linear_model = linear_model
+        self.__post_init__()
 
-    def vol(self, k, t) -> np.ndarray:
+    def __post_init__(self) -> None:
+        if self._taus.ndim != 1:
+            msg = "taus must be a 1-D array."
+            raise ValueError(msg)
+
+        if self._taus.dtype != np.float64:
+            msg = "taus must have dtype float64 (double)."
+            raise TypeError(msg)
+
+        if not np.all(np.diff(self._taus) > 0.0):
+            msg = "taus must be strictly increasing."
+            raise ValueError(msg)
+
+        if len(self._smiles) != self._taus.size:
+            msg = "Number of smiles must match number of taus."
+            raise ValueError(msg)
+
+    def vol(self, k: np.ndarray, t: np.ndarray) -> np.ndarray:
         """Evaluate the surface at strikes and maturities.
 
         If t is between existing slices, interpolate in total variance.
@@ -81,6 +102,11 @@ class VolSurface:
 
         return vols
 
+    def atmf_vol(self, t: np.ndarray) -> float:
+        """Returns the at-the-money forward vol for given maturities."""
+        k = self._linear_model.fwd(t)
+        return self.vol(k, t)
+
     def _vol_at_scalar_maturity(self, k: np.ndarray, t: float) -> np.ndarray:
         """Helper: interpolate/extrapolate vols for scalar maturity t."""
         taus = self._taus
@@ -92,7 +118,7 @@ class VolSurface:
         if t >= float(taus[-1]):
             return self._smiles[-1].vol(k)
 
-        # Interpolate in total variance between the two surrounding slices.
+        # Interpolate in total variance
         hi = int(np.searchsorted(taus, t, side="left"))
         lo = hi - 1
 
