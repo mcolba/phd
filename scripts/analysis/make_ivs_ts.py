@@ -29,7 +29,7 @@ MONEYNESS_TYPE = "delta"
 MONEYNESS_GRID = np.array([0.05, 0.25, 0.5, 0.75, 0.95])
 TAU_GRID = np.array([30.0, 90.0, 180.0, 365.0, 730.0]) / 365.0
 OUTLIER_JUMP_STD = 2.0
-OUTLIER_REVERSION_STD = 1.0
+OUTLIER_REVERSION_STD = 0.5
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -83,7 +83,7 @@ def remove_transient_outliers(
     diffs = diffs[np.isfinite(diffs)]
     diff_std = float(np.std(diffs))
     if not np.isfinite(diff_std) or diff_std <= 0.0:
-        return cleaned, 0
+        raise ValueError(f"Cannot compute outlier thresholds: diff_std={diff_std}")
 
     jump_thr = jump_std * diff_std
     rev_thr = reversion_std * diff_std
@@ -160,7 +160,9 @@ def clean_iv(
 ) -> np.ndarray:
     """Forward-fill, remove transient outliers, forward-fill again on (N, T, M) IV array."""
     n, n_tau, n_m = iv.shape
-    flat = forward_fill_2d(iv.reshape(n, -1))
+    flat = iv.reshape(n, -1).astype(float)
+    flat[(~np.isfinite(flat)) | (flat <= 0.0)] = np.nan
+    flat = forward_fill_2d(flat)
 
     total = 0
     for col in range(flat.shape[1]):
@@ -188,8 +190,9 @@ def to_long_frame(
     fwd: np.ndarray,
     tau_grid: np.ndarray,
     moneyness_grid: np.ndarray,
+    ticker: str = "",
 ) -> pd.DataFrame:
-    """Stack arrays into long-format DataFrame: anchor, type, strike, tau, value."""
+    """Stack arrays into long-format DataFrame: ticker, anchor, type, strike, tau, value."""
     n = dates.size
 
     # IVS rows: (N, T, M) → flat
@@ -201,6 +204,7 @@ def to_long_frame(
     )
     ivs = pd.DataFrame(
         {
+            "ticker": ticker,
             "anchor": dates[d_ix.ravel()],
             "type": "IVS",
             "strike": moneyness_grid[m_ix.ravel()],
@@ -216,6 +220,7 @@ def to_long_frame(
 
     disc_df = pd.DataFrame(
         {
+            "ticker": ticker,
             "anchor": curve_anchor,
             "type": "DISC",
             "strike": np.nan,
@@ -225,6 +230,7 @@ def to_long_frame(
     )
     fwd_df = pd.DataFrame(
         {
+            "ticker": ticker,
             "anchor": curve_anchor,
             "type": "FWD",
             "strike": np.nan,
@@ -235,7 +241,7 @@ def to_long_frame(
 
     return (
         pd.concat([ivs, disc_df, fwd_df], ignore_index=True)
-        .sort_values(["anchor", "type", "tau", "strike"], na_position="first")
+        .sort_values(["ticker", "anchor", "type", "tau", "strike"], na_position="first")
         .reset_index(drop=True)
     )
 
@@ -256,7 +262,7 @@ def main() -> pd.DataFrame:
         iv = clean_iv(iv)
         disc = forward_fill_2d(disc)
         fwd = forward_fill_2d(fwd)
-        frames.append(to_long_frame(dates, iv, disc, fwd, TAU_GRID, MONEYNESS_GRID))
+        frames.append(to_long_frame(dates, iv, disc, fwd, TAU_GRID, MONEYNESS_GRID, ticker=ticker))
 
     df = pd.concat(frames, ignore_index=True)
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -267,4 +273,4 @@ def main() -> pd.DataFrame:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    main()
+    df = main()
