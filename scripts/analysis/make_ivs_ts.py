@@ -1,15 +1,17 @@
+"""Extract calibrated IVS time series from shelved mixture models → tabular CSV.
+
+Pipeline: extract from shelve → forward-fill → clean IV outliers → write CSV.
+Output columns: anchor, type (IVS|FWD|DISC), strike, tau, value.
+"""
+
 from __future__ import annotations
 
-import datetime as dt
 import logging
 import shelve
-from collections.abc import Mapping
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from pandera import pandas
 
 from vol_risk.models.linear import LinearEquityMarket, make_raw_disc_curve, make_raw_interpolator
 from vol_risk.vol_surface.interpl.mixture import LogNormMixParams, _make_smile_fun
@@ -20,42 +22,24 @@ log = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SHELVE_PATH = PROJECT_ROOT / "data" / "derived" / "mixture"
-OUTPUT_PATH = PROJECT_ROOT / "data" / "derived" / "mixture" / "spx_ivs_ts.npz"
+OUTPUT_PATH = SHELVE_PATH.with_name("ivs_ts.csv")
 
-TICKER = "SPX"
+TICKERS = ("SPX",)
 MONEYNESS_TYPE = "delta"
 MONEYNESS_GRID = np.array([0.05, 0.25, 0.5, 0.75, 0.95])
-TAU_GRID = np.array([30.0, 90.0, 180.0, 365.0, 730.0], dtype=float) / 365.0
+TAU_GRID = np.array([30.0, 90.0, 180.0, 365.0, 730.0]) / 365.0
+OUTLIER_JUMP_STD = 2.0
+OUTLIER_REVERSION_STD = 1.0
 
 
-@dataclass(frozen=True)
-class IvsTimeSeries:
-    """Fixed-grid implied-volatility time series and market curves."""
-
-    dates: np.ndarray
-    tau_grid: np.ndarray
-    moneyness_grid: np.ndarray
-    iv: np.ndarray
-    disc: np.ndarray
-    fwd: np.ndarray
-
-    @property
-    def df(self) -> pd.DataFrame:
-        """Return a copy of the underlying DataFrame."""
-        return pd.DataFrame(
-            data=self.iv.reshape(self.dates.size, -1),
-            index=self.dates,
-            columns=pd.MultiIndex.from_product([self.tau_grid, self.moneyness_grid], names=["tau", "moneyness"]),
-        )
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
 
-def _build_market_and_surface(entry: Mapping[str, object]) -> tuple[LinearEquityMarket, VolSurface]:
+def _build_market_and_surface(entry: dict) -> tuple[LinearEquityMarket, VolSurface]:
+    """Reconstruct market model and vol surface from a shelved calibration entry."""
     linear_params, ivs_params = entry["params"]
-    tau = linear_params["tau"]
-    r = linear_params["r"]
-    q = linear_params["q"]
+    tau, r, q = linear_params["tau"], linear_params["r"], linear_params["q"]
 
-    #TODO (Marco): save spot in shelve!
     alpha = [v["coeff"][0] for _, v in entry["stats"][0].items() if not v["excluded"]]
     spot = (alpha / np.exp(-q * tau))[0]
 
@@ -64,7 +48,6 @@ def _build_market_and_surface(entry: Mapping[str, object]) -> tuple[LinearEquity
         disc_curve=make_raw_disc_curve(tau=tau, r=r),
         cont_carry_curve=make_raw_interpolator(tau=tau, r=q),
     )
-
     smiles = [
         _make_smile_fun(
             params=LogNormMixParams(
@@ -77,69 +60,211 @@ def _build_market_and_surface(entry: Mapping[str, object]) -> tuple[LinearEquity
         )
         for v in ivs_params.values()
     ]
-
     taus = np.array([v["tau"] for v in ivs_params.values()], dtype=float)
-    return VolSurface(taus=taus, smiles=smiles, linear_model=market)
+    return market, VolSurface(taus=taus, smiles=smiles, linear_model=market)
 
 
-def make_ivs_from_shelve(
+def forward_fill_2d(arr: np.ndarray) -> np.ndarray:
+    """Forward-fill NaN along axis 0 of a 2-D array."""
+    return pd.DataFrame(arr).ffill().to_numpy(dtype=float)
+
+
+def remove_transient_outliers(
+    series: np.ndarray,
+    jump_std: float = OUTLIER_JUMP_STD,
+    reversion_std: float = OUTLIER_REVERSION_STD,
+) -> tuple[np.ndarray, int]:
+    """NaN-out isolated one-day spikes in a 1-D series (spike + immediate reversion)."""
+    cleaned = np.asarray(series, dtype=float).copy()
+    if cleaned.size < 3:
+        return cleaned, 0
+
+    diffs = np.diff(cleaned)
+    diffs = diffs[np.isfinite(diffs)]
+    diff_std = float(np.std(diffs))
+    if not np.isfinite(diff_std) or diff_std <= 0.0:
+        return cleaned, 0
+
+    jump_thr = jump_std * diff_std
+    rev_thr = reversion_std * diff_std
+    mask = np.zeros(cleaned.size, dtype=bool)
+
+    for i in range(1, cleaned.size - 1):
+        left, cur, right = cleaned[i - 1], cleaned[i], cleaned[i + 1]
+        if not np.isfinite([left, cur, right]).all():
+            continue
+        jl, jr = cur - left, cur - right
+        if abs(jl) > jump_thr and abs(jr) > jump_thr and abs(right - left) <= rev_thr and np.sign(jl) == np.sign(jr):
+            mask[i] = True
+
+    cleaned[mask] = np.nan
+    return cleaned, int(mask.sum())
+
+
+# ── Extract ──────────────────────────────────────────────────────────────────
+
+
+def extract_ticker(
     ticker: str,
     path: Path,
     moneyness_type: str,
     moneyness_grid: np.ndarray,
     tau_grid: np.ndarray,
-) -> IvsTimeSeries:
-    if moneyness_type not in MONEYNESS_REGISTRY and moneyness_type != "k":
-        msg = f"Unsupported moneyness_type={moneyness_type!r}."
-        raise ValueError(msg)
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Read shelve entries for one ticker → (dates, iv, disc, fwd) arrays.
 
-    grid_m = np.sort(np.asarray(moneyness_grid, dtype=float))
-    grid_t = np.asarray(tau_grid, dtype=float)
-    if grid_m.ndim != 1 or grid_m.size == 0 or not np.all(np.isfinite(grid_m)):
-        msg = "moneyness_grid must be a non-empty 1-D finite array."
-        raise ValueError(msg)
-    if grid_t.ndim != 1 or grid_t.size == 0 or np.any(grid_t <= 0.0):
-        msg = "tau_grid must be a non-empty 1-D positive array."
-        raise ValueError(msg)
-
-    with shelve.open(str(path), flag="r") as db:
+    Returns:
+        dates (N,), iv (N, T, M), disc (N, T), fwd (N, T).
+    """
+    with shelve.open(str(path), flag="r") as db:  # noqa: S301
         keys = sorted(k for k in db if k.startswith(f"{ticker}_"))
         if not keys:
-            msg = f"No entries found for ticker={ticker!r} in shelve={path}."
-            raise ValueError(msg)
+            raise ValueError(f"No entries for {ticker!r} in {path}")
 
-        iv = np.full((len(keys), grid_t.size, grid_m.size), np.nan, dtype=float)
-        disc = np.full((len(keys), grid_t.size), np.nan, dtype=float)
-        fwd = np.full((len(keys), grid_t.size), np.nan, dtype=float)
-        dates = np.empty(len(keys), dtype="datetime64[D]")
+        n = len(keys)
+        iv = np.full((n, tau_grid.size, moneyness_grid.size), np.nan)
+        disc = np.full((n, tau_grid.size), np.nan)
+        fwd = np.full((n, tau_grid.size), np.nan)
+        dates = np.empty(n, dtype="datetime64[D]")
 
         for i, key in enumerate(keys):
             row = db[key]
             dates[i] = np.datetime64(row["date"])
+            market, surface = _build_market_and_surface(row)
+            disc[i] = np.asarray(market.df(tau_grid), dtype=float)
+            fwd[i] = np.asarray(market.fwd(tau_grid), dtype=float)
 
-            surface = _build_market_and_surface(row)
-            disc[i] = np.asarray(surface._linear_model.df(grid_t), dtype=float)
-            fwd[i] = np.asarray(surface._linear_model.fwd(grid_t), dtype=float)
+            moneyness_model = MONEYNESS_REGISTRY[moneyness_type](le=market)
+            for j, tau in enumerate(tau_grid):
+                strikes = moneyness_model.invert(
+                    moneyness=moneyness_grid,
+                    tau=tau,
+                    sigma=surface.atmf_vol(np.atleast_1d(tau)),
+                )
+                iv[i, j] = np.asarray(
+                    surface.vol(strikes, np.full_like(strikes, tau)),
+                    dtype=float,
+                )
 
-            if not np.all(np.isfinite(fwd[i])):
-                msg = f"Non-finite forward curve for key={key}, date={row['date']}."
-                raise ValueError(msg)
+    log.info("%s: extracted %d dates", ticker, n)
+    return dates, iv, disc, fwd
 
-            for j, tau in enumerate(grid_t):
-                moneyness = MONEYNESS_REGISTRY[moneyness_type](le=surface._linear_model)
-                kwargs = {"moneyness": grid_m, "tau": tau, "sigma": surface.atmf_vol(np.atleast_1d(tau))}
-                strikes = moneyness.invert(**kwargs)
-                iv[i, j] = np.asarray(surface.vol(strikes, np.full_like(strikes, tau, dtype=float)), dtype=float)
 
-    return IvsTimeSeries(dates=dates, tau_grid=grid_t, moneyness_grid=grid_m, iv=iv, disc=disc, fwd=fwd)
+# ── Transform ────────────────────────────────────────────────────────────────
+
+
+def clean_iv(
+    iv: np.ndarray,
+    jump_std: float = OUTLIER_JUMP_STD,
+    reversion_std: float = OUTLIER_REVERSION_STD,
+) -> np.ndarray:
+    """Forward-fill, remove transient outliers, forward-fill again on (N, T, M) IV array."""
+    n, n_tau, n_m = iv.shape
+    flat = forward_fill_2d(iv.reshape(n, -1))
+
+    total = 0
+    for col in range(flat.shape[1]):
+        flat[:, col], count = remove_transient_outliers(
+            flat[:, col],
+            jump_std=jump_std,
+            reversion_std=reversion_std,
+        )
+        total += count
+
+    if total > 0:
+        log.info("Removed %d transient IV outliers", total)
+        flat = forward_fill_2d(flat)
+
+    return flat.reshape(n, n_tau, n_m)
+
+
+# ── Format ───────────────────────────────────────────────────────────────────
+
+
+def to_long_frame(
+    dates: np.ndarray,
+    iv: np.ndarray,
+    disc: np.ndarray,
+    fwd: np.ndarray,
+    tau_grid: np.ndarray,
+    moneyness_grid: np.ndarray,
+) -> pd.DataFrame:
+    """Stack arrays into long-format DataFrame: anchor, type, strike, tau, value."""
+    n = dates.size
+
+    # IVS rows: (N, T, M) → flat
+    d_ix, t_ix, m_ix = np.meshgrid(
+        np.arange(n),
+        np.arange(tau_grid.size),
+        np.arange(moneyness_grid.size),
+        indexing="ij",
+    )
+    ivs = pd.DataFrame(
+        {
+            "anchor": dates[d_ix.ravel()],
+            "type": "IVS",
+            "strike": moneyness_grid[m_ix.ravel()],
+            "tau": tau_grid[t_ix.ravel()],
+            "value": iv.ravel(),
+        }
+    )
+
+    # DISC and FWD rows: (N, T) → flat
+    d_ix2, t_ix2 = np.meshgrid(np.arange(n), np.arange(tau_grid.size), indexing="ij")
+    curve_anchor = dates[d_ix2.ravel()]
+    curve_tau = tau_grid[t_ix2.ravel()]
+
+    disc_df = pd.DataFrame(
+        {
+            "anchor": curve_anchor,
+            "type": "DISC",
+            "strike": np.nan,
+            "tau": curve_tau,
+            "value": disc.ravel(),
+        }
+    )
+    fwd_df = pd.DataFrame(
+        {
+            "anchor": curve_anchor,
+            "type": "FWD",
+            "strike": np.nan,
+            "tau": curve_tau,
+            "value": fwd.ravel(),
+        }
+    )
+
+    return (
+        pd.concat([ivs, disc_df, fwd_df], ignore_index=True)
+        .sort_values(["anchor", "type", "tau", "strike"], na_position="first")
+        .reset_index(drop=True)
+    )
+
+
+# ── Pipeline ─────────────────────────────────────────────────────────────────
+
+
+def main() -> pd.DataFrame:
+    frames = []
+    for ticker in TICKERS:
+        dates, iv, disc, fwd = extract_ticker(
+            ticker=ticker,
+            path=SHELVE_PATH,
+            moneyness_type=MONEYNESS_TYPE,
+            moneyness_grid=MONEYNESS_GRID,
+            tau_grid=TAU_GRID,
+        )
+        iv = clean_iv(iv)
+        disc = forward_fill_2d(disc)
+        fwd = forward_fill_2d(fwd)
+        frames.append(to_long_frame(dates, iv, disc, fwd, TAU_GRID, MONEYNESS_GRID))
+
+    df = pd.concat(frames, ignore_index=True)
+    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(OUTPUT_PATH, index=False)
+    log.info("Wrote %d rows to %s", len(df), OUTPUT_PATH)
+    return df
 
 
 if __name__ == "__main__":
-    ts = out = make_ivs_from_shelve(
-        ticker=TICKER,
-        path=SHELVE_PATH,
-        moneyness_type=MONEYNESS_TYPE,
-        moneyness_grid=MONEYNESS_GRID,
-        tau_grid=TAU_GRID,
-    )
-    df = ts.df
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    main()
