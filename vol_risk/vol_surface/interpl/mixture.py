@@ -19,7 +19,8 @@ log = logging.getLogger(__name__)
 
 SIGMA_MAX = 4.0
 SIGMA_MIN = 0.05
-THETA_EPSILON = 0.0001
+THETA_1_EPSILON = 0.01
+THETA_2_EPSILON = 0.15
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +85,7 @@ def _mixed_log_norm_call(
         msg = "mixture weights must sum to 1"
         raise ValueError(msg)
 
+    # TODO(Marco): vectorise
     return (1 - pdef) * np.sum(
         w[i] * black76_price(df=DF, f=F * np.exp(mu[i] * tau) / (1 - pdef), k=K, t=tau, sigma=sigma[i], is_call=True)
         for i in range(len(w))
@@ -266,10 +268,36 @@ BIJECTION_FALLBACK = {
 
 BOUNDS_METHODS = {
     "reduced": lambda n, sigma_min: (np.repeat(sigma_min, n), np.repeat(np.inf, n)),
-    "full": lambda n, sigma_min: (
-        np.concatenate([np.repeat(0 + THETA_EPSILON, n - 1), np.repeat(-np.inf, n - 1), np.repeat(sigma_min, n)]),
+    "full_mu_unbounded": lambda n, sigma_min: (
         np.concatenate(
-            [np.repeat(np.pi / 2 - THETA_EPSILON, n - 1), np.repeat(np.inf, n - 1), np.repeat(SIGMA_MAX, n)]
+            [
+                np.repeat(0 + THETA_1_EPSILON, n - 1),
+                np.repeat(-np.inf, n - 1),
+                np.repeat(sigma_min, n),
+            ]
+        ),
+        np.concatenate(
+            [
+                np.repeat(np.pi / 2 - THETA_1_EPSILON, n - 1),
+                np.repeat(np.inf, n - 1),
+                np.repeat(SIGMA_MAX, n),
+            ]
+        ),
+    ),
+    "full_mu_bounded": lambda n, sigma_min: (
+        np.concatenate(
+            [
+                np.repeat(0 + THETA_1_EPSILON, n - 1),
+                np.repeat(-np.inf, n - 1),
+                np.repeat(sigma_min, n),
+            ]
+        ),
+        np.concatenate(
+            [
+                np.repeat(np.pi / 2 - THETA_1_EPSILON, n - 1),
+                np.concatenate([[np.pi / 2 - THETA_2_EPSILON], np.repeat(np.inf, n - 2)]),
+                np.repeat(SIGMA_MAX, n),
+            ]
         ),
     ),
 }
@@ -376,7 +404,7 @@ def _uninformative_start_guess(n: int, sigma_atm: float, tau: float) -> LogNormM
     exp_mu_min = 0.85
     exp_mu_max = 2 - exp_mu_min
     mu0 = np.log(np.linspace(exp_mu_min, exp_mu_max, n)) / tau
-    sigma0 = np.repeat(sigma_atm, n)
+    sigma0 = np.clip(np.repeat(sigma_atm, n), SIGMA_MIN, SIGMA_MAX)
     return LogNormMixParams(w0, mu0, sigma0)
 
 
@@ -413,13 +441,22 @@ def calib_mixture_smile(
     encoder = BIJECTION_METHODS[transform_method](float(tau))
     x0, unravel = make_ravel_param(p0, encoder, check_unravel=False)
 
-    bounds_type = "reduced" if transform_method == "reduced" else "full"
+    if transform_method == "reduced":
+        bounds_type = "reduced"
+    elif prev_params is None:
+        bounds_type = "full_mu_bounded"
+    else:
+        bounds_type = "full_mu_unbounded"
+
     bounds_factory = BOUNDS_METHODS.get(bounds_type)
     bounds = bounds_factory(n, min_vol)
 
     if len(bounds[0]) != len(x0):
         msg = f"Bounds length does not match number of parameters {len(x0)}."
         raise ValueError(msg)
+
+    # Clip initial guess to bounds
+    x0 = np.clip(x0, bounds[0], bounds[1])
 
     def _loss_function(x: ArrayLike) -> np.ndarray:
         param = unravel(x)
@@ -473,10 +510,10 @@ def calib_mixture_smile(
             residuals = np.concatenate([residuals, arbitrage])
             weights = np.concatenate([weights, np.repeat(lambda_ca, arbitrage.size)])
 
-        return np.sqrt(weights) * residuals
+        return weights * residuals
 
     res = least_squares(
-        fun=lambda x: (_loss_function(x)),
+        fun=lambda x: _loss_function(x),
         x0=x0,
         jac="3-point",
         method="trf",
@@ -488,7 +525,15 @@ def calib_mixture_smile(
         msg = f"Log-normal mixture calibration did not converge for tau={float(tau):.2f}): {res.message}"
         log.warning(msg)
 
-    return unravel(res.x), {"error": res.fun[: len(mkt_prices)]}
+    stats = {
+        "error": res.fun[: len(mkt_prices)],
+        "mse": np.mean(res.fun[: len(mkt_prices)] ** 2),
+        "success": res.success,
+        "message": res.message,
+        "cost": res.cost,
+    }
+
+    return unravel(res.x), stats
 
 
 def _make_smile_fun(params: LogNormMixParams, le: LinearEquityMarket, tau: float, pdef: float = 0.0) -> VolSmile:
@@ -556,6 +601,7 @@ def calib_mixture_ivs(
     taus: list[float] = []
     smiles: list[VolSmile] = []
     params: dict = {}
+    stats: dict = {}
 
     prev_params = x0
 
@@ -604,9 +650,9 @@ def calib_mixture_ivs(
         else:
             transform_method_ = transform_method
             p0 = _force_mu_to_unit_sum(prev_params, tau)
-            lambda_w = 0.01
-            lambda_mu = 0.01
-            lambda_sigma = 0.01
+            lambda_w = 1e-4
+            lambda_mu = 1e-2
+            lambda_sigma = 1e-4
             if "totvar" in transform_method_ and prev_tau is not None:
                 # Adjust sigma to keep total variance constant.
                 scaled_sigma = prev_params.sigma * np.sqrt(prev_tau / tau)
@@ -627,7 +673,7 @@ def calib_mixture_ivs(
         else:
             no_arb_data = None
 
-        fitted, stats = calib_mixture_smile(
+        fitted, stats_t = calib_mixture_smile(
             n=n_components,
             k=k_sl,
             tau=tau,
@@ -656,8 +702,16 @@ def calib_mixture_ivs(
             "tau": tau,
             "params": fitted,
         }
+        stats[t] = stats_t
 
-    return VolSurface(np.array(taus, dtype=float), smiles), params, stats
+    surface_mae = float(np.mean(np.concatenate([np.abs(x["error"]) for x in stats.values()])))
+    stats["surface_mae"] = surface_mae
+
+    if lw_type == "vega" and surface_mae > 1e-2:
+        msg = f"High surface MAE: {surface_mae:.4f}. Consider increasing the number of components or adjusting regularization."
+        log.warning(msg)
+
+    return VolSurface(np.array(taus, dtype=float), smiles, mkt), params, stats
 
 
 def gaussian_pdf(x: ArrayLike, mu: ArrayLike, sigma: ArrayLike) -> np.ndarray:
