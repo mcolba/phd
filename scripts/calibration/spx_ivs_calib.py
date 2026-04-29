@@ -19,7 +19,7 @@ from vol_risk.calibration.mixture_pipeline import (
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LOG_FILE_PATH = PROJECT_ROOT / "results" / "logging" / "spx_ivs_calib.log"
 
-INPUT_PATH = Path(r"C:/Users/g04741/OneDrive - Nordea/Marco/04 Data/option_metrics/parquet")
+INPUT_PATH = Path(r"D:\option_metrics\parquet")
 OUTPUT_PATH = PROJECT_ROOT / "data" / "derived" / "mixture"
 
 run_key = contextvars.ContextVar("run_key", default="-")
