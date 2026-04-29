@@ -106,6 +106,9 @@ def make_optionmetrics_chain(
         symbol = df_chain["symbol"].fillna("").astype(str)
         df_chain = df_chain.loc[~symbol.str.contains("SPXW", na=False)]
 
+    mask = df_chain.best_offer > df_chain.best_bid
+    df_chain = df_chain.loc[mask]
+
     df_chain = df_chain.assign(
         strike=df_chain["strike_price"].astype(float) / 1000.0,
         anchor=pd.to_datetime(df_chain["date"]),
@@ -117,4 +120,5 @@ def make_optionmetrics_chain(
         option_type=df_chain["cp_flag"].astype(str).str.strip().str.upper(),
         spot=df_chain["underlying_close"].astype(float),
     )
+
     return OptionChain(df_chain, Actual365Fixed)

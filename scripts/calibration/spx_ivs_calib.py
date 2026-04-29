@@ -9,18 +9,17 @@ from pathlib import Path
 import pyarrow.dataset as ds
 from tqdm import tqdm
 
+from vol_risk.calibration.config.default_config import MixtureCalibIndexConfig
 from vol_risk.calibration.data_loaders import make_optionmetrics_chain
 from vol_risk.calibration.mixture_pipeline import (
     ChainCutoff,
-    ChainFilter,
-    MixtureCalibConfig,
     run_mixture_pipeline,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LOG_FILE_PATH = PROJECT_ROOT / "results" / "logging" / "spx_ivs_calib.log"
 
-INPUT_PATH = Path(r"D:\option_metrics\parquet")
+INPUT_PATH = Path(r"C:/Users/g04741/OneDrive - Nordea/Marco/04 Data/option_metrics/parquet")
 OUTPUT_PATH = PROJECT_ROOT / "data" / "derived" / "mixture"
 
 run_key = contextvars.ContextVar("run_key", default="-")
@@ -68,26 +67,11 @@ log = logging.getLogger(__name__)
 # ================================================== Configuration =================================================== #
 
 TICKER = "SPX"
-OVEWRITE_EXISTING = False
+OVEWRITE_EXISTING = True
 
 epsilon = 1e-8
 cutoff_cfg = ChainCutoff("delta", (epsilon, 1.0 - epsilon))
-CALIB_CONFIG = MixtureCalibConfig(
-    n_components=3,
-    lw_type="vega",
-    transform_method="totvar_simplex",
-    repair_arbitrage=False,
-    lambda_smoothing=0,
-    filters=ChainFilter(
-        oi_min=50,
-        bid_min=0.01,
-        mid_min=0.02,
-        rel_bid_ask_max=0.5,
-        min_k_per_slice=10,
-        min_ttm=10,
-        cutoff=cutoff_cfg,
-    ),
-)
+CALIB_CONFIG = MixtureCalibIndexConfig
 # # ================================================================================================================== #
 
 

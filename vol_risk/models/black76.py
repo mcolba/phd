@@ -196,3 +196,42 @@ def bsm_spot_delta(
         sigma=sigma,
         is_call=is_call,
     )
+
+
+def _broadcast_and_flatten(*args, shape: tuple) -> list[np.ndarray]:
+    return [np.broadcast_to(np.asarray(x), shape).ravel() for x in args]
+
+
+def implied_vol(
+    price: ArrayLike,
+    strike: ArrayLike,
+    tau: ArrayLike,
+    fwd: ArrayLike,
+    disc: ArrayLike,
+    option_type: ArrayLike,
+) -> np.ndarray:
+    """Calculate implied volatilities using Jaeckel's method."""
+    price = np.asarray(price, dtype=float)
+    flat_price = price.ravel()
+
+    flat_strike, flat_tau, flat_fwd, flat_disc, flat_option_type = _broadcast_and_flatten(
+        strike, tau, fwd, disc, option_type, shape=price.shape
+    )
+
+    if option_type.dtype != bool:
+        msg = "option_type must be a boolean array where True indicates call options and False indicates put options."
+        raise ValueError(msg)
+
+    n = flat_price.size
+    iv = np.empty(n, dtype=float)
+    for i in range(n):
+        iv[i] = implied_vol_jackel(
+            price=flat_price[i],
+            f=flat_fwd[i],
+            k=flat_strike[i],
+            t=flat_tau[i],
+            df=flat_disc[i],
+            is_call=flat_option_type[i],
+        )
+
+    return iv.reshape(price.shape)

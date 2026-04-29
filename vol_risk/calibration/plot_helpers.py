@@ -37,7 +37,7 @@ AXIS_LIMITS = {
 
 
 def _instantiate_moneyness_models(le: LinearEquityMarket) -> dict[str, Moneyness]:
-    return {name: MONEYNESS_REGISTRY[name](le=le) for name in MONEYNESS_REGISTRY.keys()}
+    return {name: MONEYNESS_REGISTRY[name](le=le) for name in MONEYNESS_REGISTRY}
 
 
 def _select_atm_sigma(k_slice: np.ndarray, fwd_value: float, iv_slice: np.ndarray) -> float:
@@ -302,8 +302,8 @@ def plot_total_variance_curves(
 
 
 def plot_smile_and_mkt_grid(
-    chain_all: OptionChain,
-    chain_otm: OptionChain,
+    chain_raw: OptionChain,
+    chain_calib: OptionChain,
     lin_mkt: LinearEquityMarket,
     surface: VolSurface,
     coord: str = "lkf",
@@ -311,7 +311,7 @@ def plot_smile_and_mkt_grid(
     title: str | None = None,
 ) -> tuple[plt.Figure, np.ndarray]:
     """Plot market implied vols against the fitted surface across expiries."""
-    expiries = np.unique(chain_all.expiry)
+    expiries = np.unique(chain_raw.expiry)
     n = expiries.size
     n_row = n // n_col + int(n % n_col > 0)
     fig, axes = plt.subplots(n_row, n_col, sharex=True, sharey=True, figsize=(4 * n_col, 3 * n_row))
@@ -319,10 +319,12 @@ def plot_smile_and_mkt_grid(
 
     axis_label = AXIS_LABELS[coord]
 
-    for idx, (expiry, sl) in enumerate(chain_all):
+    sigma_max = 0.0
+    for idx, (expiry, sl) in enumerate(chain_raw):
         ax = axes[idx]
-        df_plt = _make_iv_plt_data(sl, chain_otm, lin_mkt, coord)
-        plot_iv_slice(ax, df_plt, lin_mkt, surface, sl, coord, chain_all.spot, idx, expiry)
+        df_plt = _make_iv_plt_data(sl, chain_calib, lin_mkt, coord)
+        plot_iv_slice(ax, df_plt, lin_mkt, surface, sl, coord, chain_raw.spot, idx, expiry)
+        sigma_max = max(sigma_max, df_plt.loc[df_plt["moneyness"].between(*AXIS_LIMITS[coord]), "iv_mid"].max())
 
     for j in range(idx + 1, axes.size):
         axes[j].axis("off")
@@ -331,6 +333,7 @@ def plot_smile_and_mkt_grid(
     for ax in visible_axes:
         ax.set_xlabel("")
         ax.tick_params(labelbottom=False)
+        ax.set_ylim(0.0, min(sigma_max + 0.1, 1.5))
 
     for col_idx in range(n_col):
         col_axes = visible_axes[col_idx::n_col]
@@ -354,7 +357,8 @@ def plot_smile_and_mkt_grid(
 
 
 def plot_mixture_smile_and_rnd(
-    chain_slice: OptionChain,
+    chain_calib: OptionChain,
+    chain_raw: OptionChain,
     lin_mkt: LinearEquityMarket,
     surface: VolSurface,
     params: LogNormMixParams,
@@ -364,25 +368,26 @@ def plot_mixture_smile_and_rnd(
     n: int = 400,
 ) -> tuple[plt.Figure, tuple[plt.Axes, plt.Axes]]:
     """Create a figure with volatility smile and RND side by side."""
-    tau_slice = float(chain_slice.tau[0])
+    assert chain_calib.slice_tau == chain_raw.slice_tau
+    tau_slice = float(chain_calib.tau[0])
     rnd = make_mixture_rnd_function(params=params, tau=tau_slice)
 
     fig, (ax_smile, ax_rnd) = plt.subplots(1, 2, figsize=(10, 4))
     # Prepare DataFrame for plotting
     df_plt = _make_iv_plt_data(
-        sl_raw=chain_slice,
-        sl_calib=chain_slice,
+        sl_raw=chain_raw,
+        sl_calib=chain_calib,
         lin_mkt=lin_mkt,
         coord=coord,
     )
-    spot = chain_slice.spot
-    expiry = chain_slice.df["expiry"].iloc[0]
+    spot = chain_calib.spot
+    expiry = chain_calib.df["expiry"].iloc[0]
     plot_iv_slice(
         ax=ax_smile,
         df_plt=df_plt,
         lin_mkt=lin_mkt,
         surface=surface,
-        sl=chain_slice,
+        sl=chain_calib,
         coord=coord,
         spot=spot,
         idx=0,

@@ -14,18 +14,18 @@ from vol_risk.calibration.mixture_pipeline import (
     ChainCutoff,
     ChainFilter,
     MixtureCalibConfig,
-    ThinPlateSmilePreprocess,
     run_mixture_pipeline,
 )
 from vol_risk.calibration.plot_helpers import (
     _instantiate_moneyness_models,
     plot_iv_3d_surface,
+    plot_mixture_smile_and_rnd,
     plot_smile_and_mkt_grid,
     plot_total_variance_curves,
 )
 
 logging.basicConfig(
-    level=logging.WARNING,
+    level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
@@ -33,20 +33,13 @@ logger = logging.getLogger(__name__)
 plt.style.use("ggplot")
 
 N_COMPONENTS = 3
-MONEYNESS = "kf"
+MONEYNESS = "lkf"
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 OPTIONS_DIR = Path(r"D:\option_metrics\parquet")
 
-EOD_DATE = "2008-12-17 00:00:00.000000000"
+EOD_DATE = "2007-12-31 00:00:00.000000000"
 TICKER = "SPX"
-
-# THIN_PLATE_PREPROCESS = ThinPlateSmilePreprocess(
-#     lkf_bounds=(-0.4, 0.4),
-#     grid_size=50,
-#     spline_smoothing=1.0,
-#     synthetic_weight=2.0,
-# )
 
 
 if __name__ == "__main__":
@@ -65,36 +58,35 @@ if __name__ == "__main__":
     chain_all = make_optionmetrics_chain(df)
 
     # 2. Run calibration pipeline
-    epsilon = 1e-7
+    epsilon = 1e-8
     cutoff_cfg = ChainCutoff("delta", (epsilon, 1.0 - epsilon))
-    filter_config = ChainFilter(
-        oi_min=50,
-        bid_min=0.01,
-        mid_min=0.02,
-        rel_bid_ask_max=1.0,
-        min_k_per_slice=10,
-        min_ttm=10,
-        cutoff=cutoff_cfg,
-    )
     config = MixtureCalibConfig(
         n_components=N_COMPONENTS,
-        lw_type="vega",
+        t0_start_guess="smirk",
+        lw_type="vega_and_spread",
         transform_method="totvar_simplex",
-        filters=filter_config,
-        repair_arbitrage=False,
+        lambda_tm1_params=(1e-3, 1e-2, 1e-3),
+        lambda_smoothing=0,
+        min_k_per_slice=10,
+        repair_arbitrage=True,
+        soft_liquidity_filter=True,
+        remove_short_span_slices=True,
+        use_calendar_arb_bounds=True,
+        liquidity_filter=ChainFilter(
+            oi_min=1,
+            bid_min=0.01,
+            mid_min=0.02,
+            rel_bid_ask_max=3,
+            min_ttm=10,
+        ),
+        moneyness_cutoff=cutoff_cfg,
     )
-
     result = run_mixture_pipeline(chain_all, config)
 
     surface = result.surface
     params_ivs = result.params[1]
     lin_mkt = result.lin_mkt
-    chain_otm = result.chain_otm
-    chain_calib = result.chain_calib
-
-    if "synthetic" in chain_calib.df.columns:
-        synthetic_count = int(chain_calib.df["synthetic"].sum())
-        logger.info("Calibration chain contains %d synthetic thin-plate quotes.", synthetic_count)
+    _, chain_ivs = result.chains
 
     mix_by_expiry = {expiry: params_ivs[expiry]["params"] for expiry in params_ivs}
     expiries_sorted = sorted(mix_by_expiry)
@@ -173,7 +165,7 @@ if __name__ == "__main__":
             params_ivs=params_ivs,
             lin_mkt=lin_mkt,
             surface=surface,
-            coord="kf",
+            coord="lkf",
         )
         ax.set_title(f"Total Variance Curves — {TICKER} {EOD_DATE}")
         plt.show()
@@ -184,8 +176,8 @@ if __name__ == "__main__":
 
     # 5. Plot market implied vols vs mixture surface (by expiry)
     plot_smile_and_mkt_grid(
-        chain_all=chain_all,
-        chain_otm=chain_otm,
+        chain_raw=chain_all,
+        chain_calib=chain_ivs,
         lin_mkt=lin_mkt,
         surface=surface,
         coord=plots_coord,
@@ -201,7 +193,7 @@ if __name__ == "__main__":
         ax=ax,
         coord=plots_coord,
         surface=surface,
-        chain=chain_calib,
+        chain=chain_ivs,
         lin_mkt=lin_mkt,
     )
     ax.set_title(f"Mixture IV Surface — {TICKER} {EOD_DATE}")
@@ -209,48 +201,35 @@ if __name__ == "__main__":
     plt.show()
 
     # 7. Plot smile and risk-neutral density side by side for selected expiries
-    # output_dir = PROJECT_ROOT / "results"
-    # output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = PROJECT_ROOT / "results"
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    # def _plot_nth_smile(idx: int, file_name: Path) -> None:
-    #     if idx >= len(expiries_sorted):
-    #         logger.warning(
-    #             "Skipping plot for index %d — only %d expiries available.",
-    #             idx,
-    #             len(expiries_sorted),
-    #         )
-    #         return
+    def _plot_nth_smile(idx: int, file_name: Path = None) -> None:
+        if idx >= len(expiries_sorted):
+            logger.warning(
+                "Skipping plot for index %d — only %d expiries available.",
+                idx,
+                len(expiries_sorted),
+            )
+            return
 
-    #     example_expiry = expiries_sorted[idx]
-    #     example_params = mix_by_expiry[example_expiry]
+        key = expiries_sorted[idx]
+        example_params = mix_by_expiry[key]
 
-    #     example_slice = None
-    #     for expiry, sl in chain_all:
-    #         if expiry == example_expiry:
-    #             example_slice = sl
-    #             break
+        fig, _ = plot_mixture_smile_and_rnd(
+            chain_raw=chain_all[key],
+            chain_calib=chain_ivs[key],
+            lin_mkt=lin_mkt,
+            surface=surface,
+            params=example_params,
+            coord=plots_coord,
+        )
+        if file_name:
+            fig.savefig(file_name, dpi=300, bbox_inches="tight")
+        plt.show()
+        plt.close(fig)
 
-    #     if example_slice is not None:
-    #         fig, _ = plot_mixture_combined(
-    #             chain_slice=example_slice,
-    #             lin_mkt=lin_mkt,
-    #             surface=surface,
-    #             params=example_params,
-    #             coord=plots_coord,
-    #         )
-    #         fig.savefig(file_name, dpi=300, bbox_inches="tight")
-    #         logger.info("Saved %s", file_name)
-    #         plt.close(fig)
-
-    # date_tag = EOD_DATE.replace("-", "")
-    # _plot_nth_smile(0, output_dir / f"om_{date_tag}_gmm_{N_COMPONENTS}d_short.png")
-    # _plot_nth_smile(
-    #     min(5, len(expiries_sorted) - 1),
-    #     output_dir / f"om_{date_tag}_gmm_{N_COMPONENTS}d_mid.png",
-    # )
-    # _plot_nth_smile(
-    #     min(14, len(expiries_sorted) - 1),
-    #     output_dir / f"om_{date_tag}_gmm_{N_COMPONENTS}d_long.png",
-    # )
-
-    logger.info("Done.")
+    date_tag = EOD_DATE.replace("-", "")
+    _plot_nth_smile(0)
+    _plot_nth_smile(min(5, len(expiries_sorted) - 1))
+    _plot_nth_smile(min(14, len(expiries_sorted) - 1))

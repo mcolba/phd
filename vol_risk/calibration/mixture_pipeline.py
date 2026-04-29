@@ -7,16 +7,23 @@ in a loop with a config object and a raw option-chain DataFrame.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
+from functools import partial
 from typing import TYPE_CHECKING
 
 from vol_risk.calibration.transformers import (
-    append_synthetic_quotes,
     apply_cutoffs,
+    compose,
+    get_calendar_arb_upper_bounds,
     liquidity_filter,
     make_otm_to_call,
+    min_strikes_per_slice_filter,
+    remove_short_span_slices,
     repair_arbitrage,
+    soft_liquidity_filter,
 )
+from vol_risk.models.black76 import implied_vol
 from vol_risk.models.linear import LinearEquityMarket, LinearEquityParams, calib_linear_equity_market
 from vol_risk.vol_surface.interpl.mixture import LogNormMixParams, VolSurface, calib_mixture_ivs
 from vol_risk.vol_surface.moneyness import MONEYNESS_REGISTRY
@@ -29,12 +36,7 @@ log = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class ChainCutoff:
-    """Parameters passed to :func:`apply_cutoffs`.
-
-    Attributes:
-        moneyness_type: Key in ``MONEYNESS_REGISTRY`` selecting the moneyness measure (e.g. "delta", "lkf", "slkf").
-        bounds: (lower, upper) bounds in the chosen moneyness coordinate.
-    """
+    """Parameters passed to :func:`apply_cutoffs`."""
 
     moneyness_type: str
     bounds: tuple[float, float]
@@ -42,187 +44,166 @@ class ChainCutoff:
 
 @dataclass(frozen=True)
 class ChainFilter:
-    """Parameters for liquidity and moneyness cutoffs.
-
-    Attributes:
-        oi_min: Minimum open interest for liquidity filter.
-        bid_min: Minimum bid price for liquidity filter.
-        mid_min: Minimum mid price for liquidity filter.
-        rel_bid_ask_max: Maximum relative bid-ask spread for liquidity filter.
-        min_ttm: Minimum business days between anchor and expiry.
-        cutoff: Optional moneyness cutoff config. None disables cutoffs.
-    """
+    """Parameters for liquidity and moneyness cutoffs."""
 
     oi_min: int = 50
     bid_min: float = 0.01
     mid_min: float = 0.02
     rel_bid_ask_max: float | None = None
     min_ttm: int | None = None
-    cutoff: ChainCutoff | None = None
     min_k_per_slice: int = 5
 
 
 @dataclass(frozen=True)
-class ThinPlateSmilePreprocess:
-    """Configuration for synthetic thin-plate smile augmentation before calibration."""
-
-    lkf_bounds: tuple[float, float] = (-0.7, 0.7)
-    grid_size: int = 41
-    spline_smoothing: float = 0.0
-    min_obs_per_slice: int = 3
-    min_total_variance: float = 1e-8
-    synthetic_weight: float = 10.0
-    repair_min_price: float | None = None
-    repair_tolerance: float = 0.0
-    solver: str = "glpk"
-
-
-@dataclass(frozen=True)
 class MixtureCalibConfig:
-    """Configuration for the mixture surface calibration pipeline.
+    """Configuration for the mixture surface calibration pipeline."""
 
-    Attributes:
-        n_components: Number of log-normal mixture components.
-        lw_type: Loss-weight scheme passed to ``calib_mixture_ivs`` ("vega" or "uniform").
-        transform_method: Bijection method passed to ``calib_mixture_ivs`` (e.g. "simplex", "totvar_simplex").
-        pdef: Probability-of-default parameter.
-        filters: Option filter settings (liquidity and cutoff).
-        thin_plate_preprocess: Optional synthetic quote augmentation before calibration.
-    """
-
-    n_components: int = 3
-    lw_type: str = "vega"
-    transform_method: str = "totvar_simplex"
-    pdef: float = 0.0
-    filters: ChainFilter = field(default_factory=ChainFilter)
-    thin_plate_preprocess: ThinPlateSmilePreprocess | None = None
+    # Option chain filters & transforms
+    min_k_per_slice: int = 10
     repair_arbitrage: bool = False
+    liquidity_filter: ChainFilter | None = None
+    moneyness_cutoff: ChainCutoff | None = None
+    soft_liquidity_filter: bool = False
+    remove_short_span_slices: bool = False
+
+    # Mixture configuration
+    n_components: int = 3
+    pdef: float = 0.0
     lambda_smoothing: float = 0.0
+    lambda_tm1_params: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    lw_type: str = "vega_and_spread"
+    transform_method: str = "totvar_simplex"
+    t0_start_guess: str = "uninformative"
+    use_calendar_arb_bounds: bool = False
 
 
 @dataclass(frozen=True)
 class MixtureCalibResult:
-    """Output of :func:`run_mixture_pipeline`.
-
-    Attributes:
-        surface: Calibrated :class:`VolSurface` object.
-        stats: Per-expiry calibration statistics returned by
-            ``calib_mixture_ivs``.
-        lin_mkt: Calibrated linear equity market model.
-        chain_otm: Filtered OTM market option chain after cutoffs, before synthetic augmentation.
-        chain_calib: Option chain actually used during calibration.
-    """
+    """Output of :func:`run_mixture_pipeline`."""
 
     lin_mkt: LinearEquityMarket
     surface: VolSurface
     params: tuple[LinearEquityParams, list[LogNormMixParams]]
     stats: tuple[dict, dict]
-    chain_otm: OptionChain
-    chain_calib: OptionChain
+    chains: tuple[OptionChain, OptionChain]
 
 
 def run_mixture_pipeline(
     chain: OptionChain,
     config: MixtureCalibConfig | None = None,
 ) -> MixtureCalibResult:
-    """Run the log-normal mixture surface calibration pipeline.
-
-    Parameters
-    ----------
-    chain:
-        Option chain to calibrate. Use
-        :func:`vol_risk.calibration.data_loaders.cboe_to_option_chain` to build
-        one from a raw CBOE EOD DataFrame.
-    config:
-        Calibration configuration.  Defaults to :class:`MixtureCalibConfig` with all default values when ``None``.
-
-    Returns:
-    -------
-    MixtureCalibResult
-        Calibrated surface, per-expiry stats, linear market model and the filtered OTM chain.
-    """
-    if config is None:
-        config = MixtureCalibConfig()
+    """Run the log-normal mixture surface calibration pipeline."""
+    start_time = time.time()
 
     # 1. Apply liquidity filter
-    filt_cfg = config.filters
-    chain_liq = liquidity_filter(
-        chain,
-        oi_min=filt_cfg.oi_min,
-        bid_min=filt_cfg.bid_min,
-        mid_min=filt_cfg.mid_min,
-        rel_bid_ask_max=filt_cfg.rel_bid_ask_max,
-        min_ttm=filt_cfg.min_ttm,
-        min_k_per_slice=filt_cfg.min_k_per_slice,
-    )
+    initial_filter = []
 
-    log.info("Options after liquidity filter: %d", len(chain_liq))
+    if config.liquidity_filter is not None:
+        initial_filter.append(
+            partial(
+                liquidity_filter,
+                oi_min=config.liquidity_filter.oi_min,
+                bid_min=config.liquidity_filter.bid_min,
+                mid_min=config.liquidity_filter.mid_min,
+                rel_bid_ask_max=config.liquidity_filter.rel_bid_ask_max,
+                min_ttm=config.liquidity_filter.min_ttm,
+            )
+        )
+
+    if config.min_k_per_slice > 1:
+        initial_filter.append(partial(min_strikes_per_slice_filter, n=config.min_k_per_slice))
+
+    chain_lm = compose(*initial_filter)(chain)
+    log.info("Options used in the linear market calibration: %d", len(chain_lm))
 
     # 2. Calibrate linear equity market (rates / dividends)
-    lin_mkt, lin_mkt_params, lin_stats = calib_linear_equity_market(chain_liq)
+    lin_mkt, lin_mkt_params, lin_stats = calib_linear_equity_market(chain_lm)
     log.debug("Linear market calibration stats: %s", lin_stats)
 
     # 3. Convert to OTM calls
-    chain_otm = make_otm_to_call(chain_liq, lin_mkt)
-    log.info("Options after OTM conversion: %d", len(chain_otm))
+    post_lm_filters = [
+        partial(make_otm_to_call, le=lin_mkt),
+    ]
 
-    # 4. Optionally apply moneyness cutoffs
-    if filt_cfg.cutoff is not None:
-        cutoff_cfg = filt_cfg.cutoff
-        moneyness = MONEYNESS_REGISTRY[cutoff_cfg.moneyness_type](le=lin_mkt)
-        chain_otm = apply_cutoffs(chain_otm, moneyness=moneyness, bounds=cutoff_cfg.bounds)
-        log.info("Options after cutoff filter: %d", len(chain_otm))
-
-    # 5. Optionally augment each smile with synthetic thin-plate quotes
-    chain_calib = chain_otm
-    if config.thin_plate_preprocess:
-        preprocess_cfg = config.thin_plate_preprocess
-        chain_calib = append_synthetic_quotes(
-            chain=chain_otm,
-            market=lin_mkt,
-            k_min=preprocess_cfg.lkf_bounds[0],
-            k_max=preprocess_cfg.lkf_bounds[1],
-            grid_size=preprocess_cfg.grid_size,
-            spline_smoothing=preprocess_cfg.spline_smoothing,
-            min_obs_per_slice=preprocess_cfg.min_obs_per_slice,
-            min_total_variance=preprocess_cfg.min_total_variance,
-            synthetic_weight=preprocess_cfg.synthetic_weight,
-        )
-        synthetic_count = int(chain_calib.df["synthetic"].sum()) if "synthetic" in chain_calib.df.columns else 0
-        log.info(
-            "Options after thin-plate augmentation: %d (%d synthetic)",
-            len(chain_calib),
-            synthetic_count,
+    # 3. Apply moneyness cutoffs
+    if config.moneyness_cutoff is not None:
+        post_lm_filters.append(
+            partial(
+                apply_cutoffs,
+                moneyness=MONEYNESS_REGISTRY[config.moneyness_cutoff.moneyness_type](le=lin_mkt),
+                bounds=config.moneyness_cutoff.bounds,
+            )
         )
 
+    # apply soft liquidity filters
+    if config.soft_liquidity_filter:
+        post_lm_filters.append(
+            partial(
+                soft_liquidity_filter,
+                lin_mkt=lin_mkt,
+                oi_soft_min=50,
+                rel_bid_ask_soft_max=0.20,
+                min_lk_distance=0.04,
+                max_lk_distance=0.01,
+            )
+        )
+
+    # Ensure each slice has at least min_k_per_slice strikes
+    if config.min_k_per_slice is not None:
+        post_lm_filters.append(
+            partial(
+                min_strikes_per_slice_filter,
+                n=config.min_k_per_slice,
+            )
+        )
+
+    if config.remove_short_span_slices:
+        post_lm_filters.append(remove_short_span_slices)
+
+    # Remove arbitrage in the option quotes
     if config.repair_arbitrage:
-        chain_calib = repair_arbitrage(
-            chain=chain_calib,
-            market=lin_mkt,
-            tolerance=1e-6,
-            min_price=1e-6,
-            synthetic_weight=None,
+        post_lm_filters.append(
+            partial(
+                repair_arbitrage,
+                market=lin_mkt,
+                tolerance=1e-6,
+                min_price=1e-3,
+                synthetic_weight=None,
+            )
         )
-        log.info("Options after arbitrage repair: %d", len(chain_calib))
+
+    chain_vol = compose(*post_lm_filters)(chain_lm)
+    log.info("Options used in the IVS calibration: %d", len(chain_vol))
+
+    calendar_arb_bounds = None
+    if config.use_calendar_arb_bounds:
+        calendar_arb_bounds = get_calendar_arb_upper_bounds(chain_vol, lin_mkt, (-0.7, 0.7))
 
     # 6. Calibrate log-normal mixture for each expiry slice
     surface, ivs_params, ivs_stats = calib_mixture_ivs(
-        opt=chain_calib,
+        opt=chain_vol,
         mkt=lin_mkt,
         n_components=config.n_components,
         lw_type=config.lw_type,
         transform_method=config.transform_method,
         pdef=config.pdef,
+        lambda_tm1_params=config.lambda_tm1_params,
         lambda_smoothing=config.lambda_smoothing,
+        calendar_arb_bounds=calendar_arb_bounds,
     )
 
-    log.info("Calibration complete. Expiries calibrated: %d", len(ivs_params))
+    elapsed = time.time() - start_time
+    msg = (
+        f"Calibration complete. Expiries calibrated: {len(ivs_params)}, "
+        f"MAE: {ivs_stats['iv_mae_approx']:.4f}, "
+        f"elapsed time: {elapsed:.2f} seconds."
+    )
+    log.info(msg)
 
     return MixtureCalibResult(
         surface=surface,
         lin_mkt=lin_mkt,
         params=(lin_mkt_params, ivs_params),
         stats=(lin_stats, ivs_stats),
-        chain_otm=chain_otm,
-        chain_calib=chain_calib,
+        chains=(chain_lm, chain_vol),
     )

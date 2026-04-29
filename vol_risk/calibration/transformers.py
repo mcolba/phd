@@ -1,18 +1,41 @@
 import logging
+import math
+from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial, reduce
 
 import numpy as np
 import pandas as pd
 from arbitragerepair import constraints
-from arbitragerepair.repair import matrix, solvers
+
+# from arbitragerepair.repair import l1
+from cvxopt import matrix, solvers
 from scipy.interpolate import RBFInterpolator
 
-from vol_risk.calibration.option_chain import OptionChain, OptionSlice
-from vol_risk.models.black76 import black76_price, implied_vol_jackel
+from vol_risk.calibration.option_chain import NoArbBounds, OptionChain, OptionSlice
+from vol_risk.models.black76 import (
+    black76_price,
+    black76_undisc_fwd_delta,
+    black76_vega,
+    implied_vol,
+    implied_vol_jackel,
+)
 from vol_risk.models.linear import LinearEquityMarket
 from vol_risk.vol_surface.moneyness import DeltaMoneyness, Moneyness
 
 log = logging.getLogger(__name__)
+
+# Type alias for a single transformation step
+ChainTransform = Callable[[OptionChain], OptionChain]
+
+
+def compose(*transforms: ChainTransform) -> ChainTransform:
+    """Compose multiple OptionChain transforms into a single pipeline."""
+
+    def pipeline(chain: OptionChain) -> OptionChain:
+        return reduce(lambda c, t: t(c), transforms, chain)
+
+    return pipeline
 
 
 def _as_float_array(x: np.ndarray | float) -> np.ndarray:
@@ -69,112 +92,60 @@ def _make_quote_grid(k_min: float, k_max: float, grid_size: int) -> np.ndarray:
     return np.linspace(k_min, k_max, grid_size, dtype=float)
 
 
-def _build_rbf_surface(
+def liquidity_filter(
     chain: OptionChain,
-    market: LinearEquityMarket,
-    spline_smoothing: float,
-    min_total_variance: float,
-) -> tuple[RBFInterpolator, np.ndarray, np.ndarray]:
-    point_blocks = []
-    value_blocks = []
+    oi_min: None | int = None,
+    bid_min: None | float = None,
+    mid_min: None | float = None,
+    rel_bid_ask_max: None | float = None,
+    min_ttm: None | int = None,
+) -> OptionChain:
+    """Filter an option chain for liquid contracts."""
+    df = chain.df.copy()
 
-    for _, option_slice in chain:
-        total_variance, forward, _ = _slice_total_variance(
-            option_slice=option_slice,
-            market=market,
-            min_total_variance=min_total_variance,
-        )
-        log_fwd_moneyness = np.log(option_slice.k / forward)
-        tau_coords = np.full(log_fwd_moneyness.shape, option_slice.slice_tau, dtype=float)
-        point_blocks.append(np.column_stack((tau_coords, log_fwd_moneyness)))
-        value_blocks.append(total_variance)
+    # Liquidity filters
+    mask = pd.Series(data=True, index=df.index)
+    if oi_min is not None:
+        mask &= (df["open_interest"].notna()) & (df["open_interest"] >= oi_min)
+    if bid_min is not None:
+        mask &= (df["bid"].notna()) & (df["bid"] >= bid_min)
+    if mid_min is not None:
+        mask &= (df["mid"].notna()) & (df["mid"] >= mid_min)
+    if rel_bid_ask_max is not None:
+        if (df["mid"].isna().any()) or (df["mid"] <= 0).any():
+            msg = "Relative bid-ask spread filtering requires mid prices to be positive."
+            raise ValueError(msg)
+        mask &= ((df["ask"] - df["bid"]) / df["mid"]) <= rel_bid_ask_max
+    if min_ttm is not None:
+        anchor_days = df["anchor"].to_numpy(dtype="datetime64[D]")
+        expiry_days = df["expiry"].to_numpy(dtype="datetime64[D]")
+        mask &= np.busday_count(anchor_days, expiry_days) >= min_ttm
 
-    if not point_blocks:
-        msg = "Cannot build a 2D total-variance spline from an empty chain."
-        raise ValueError(msg)
-
-    points = np.vstack(point_blocks)
-    values = np.concatenate(value_blocks)
-    center = points.mean(axis=0)
-    scale = points.std(axis=0)
-    scale[scale == 0.0] = 1.0
-
-    spline = RBFInterpolator(
-        (points - center) / scale,
-        values,
-        kernel="thin_plate_spline",
-        smoothing=spline_smoothing,
-    )
-    return spline, center, scale
-
-
-def _evaluate_total_variance_surface(
-    spline: RBFInterpolator,
-    center: np.ndarray,
-    scale: np.ndarray,
-    tau: np.ndarray | float,
-    log_fwd_moneyness: np.ndarray | float,
-) -> np.ndarray:
-    tau_arr, log_k_arr = np.broadcast_arrays(
-        np.asarray(tau, dtype=float),
-        np.asarray(log_fwd_moneyness, dtype=float),
-    )
-    coords = np.column_stack((tau_arr.reshape(-1), log_k_arr.reshape(-1)))
-    scaled_coords = (coords - center) / scale
-    return np.asarray(spline(scaled_coords), dtype=float).reshape(tau_arr.shape)
-
-
-# def _normalise_quotes_for_repair(
-#     tau: np.ndarray,
-#     strike: np.ndarray,
-#     undiscounted_call: np.ndarray,
-#     forward: np.ndarray,
-#     min_price: float | None,
-# ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-#     df = pd.DataFrame(
-#         {
-#             "idx": np.arange(tau.size, dtype=int),
-#             "tau": tau,
-#             "strike": strike,
-#             "price": undiscounted_call,
-#             "forward": forward,
-#         }
-#     ).sort_values(["tau", "strike"], kind="stable")
-
-#     mask = ~df["price"].isna()
-#     if min_price is not None:
-#         mask &= df["price"] >= min_price
-#     df = df.loc[mask].copy()
-
-#     idx = df["idx"].to_numpy(dtype=int)
-#     tau_norm = df["tau"].to_numpy(dtype=float)
-#     strike_norm = (df["strike"] / df["forward"]).to_numpy(dtype=float)
-#     price_norm = (df["price"] / df["forward"]).to_numpy(dtype=float)
-#     forward_ord = df["forward"].to_numpy(dtype=float)
-#     return tau_norm, strike_norm, price_norm, idx, forward_ord
+    return chain.__class__(df.loc[mask, :], chain._calendar)
 
 
 def _solve_weighted_l1_repair(
-    mat_a: np.ndarray,
+    mat_A: np.ndarray,
     vec_b: np.ndarray,
     price: np.ndarray,
-    weights: np.ndarray,
+    weights: np.ndarray | None = None,
     solver: str = "glpk",
+    max_attempts: int = 2,
 ) -> np.ndarray:
-    """Weighted version of the l1() arbitrage repair in arbitragerepair.repair."""
-    n_quote = mat_a.shape[1]
-    MAX_ATTEMPTS = 1
+    """Weighted version of the l1() arbitrage repair from arbitragerepair."""
+    n_quote = mat_A.shape[1]
     sol = []
+
+    if weights is None:
+        weights = np.ones(n_quote)
 
     if price.shape[0] != n_quote or weights.shape[0] != n_quote:
         msg = "mat_a, price, and weights must agree on the number of quotes."
         raise ValueError(msg)
-    if np.any(weights <= 0.0):
-        msg = "weights must be strictly positive."
-        raise ValueError(msg)
 
-    A = -np.hstack((mat_a, -mat_a))
-    b = -(vec_b - mat_a.dot(price))
+    # Construct required quantities for the LP
+    A = -np.hstack((mat_A, -mat_A))
+    b = -(vec_b - mat_A.dot(price))
     coeff = np.hstack((weights, weights))
 
     A1 = np.vstack((A, -np.diag(np.ones(2 * n_quote))))
@@ -191,30 +162,24 @@ def _solve_weighted_l1_repair(
     G *= 2.0
     h *= 2.0
 
-    i_attempt = 1
-    scale = 0.1
-    status = "initial"
-    while status != "optimal":
-        scale *= 10
-        G *= scale
-        h *= scale
-
-        # solve the LP
+    scale = 1
+    for _ in range(max_attempts):
         sol = solvers.lp(c, G, h, solver=solver)
-        status = sol["status"]
 
-        i_attempt += 1
-        if i_attempt > MAX_ATTEMPTS:
+        if sol["status"] == "optimal":
             break
 
-    if status == "optimal":
+        c *= 10
+        h *= 10
+        scale *= 10
+
+    if sol["status"] == "optimal":
         x = np.array(sol["x"])
-        epsilon = x[:n_quote] - x[n_quote:]
-        epsilon = epsilon.flatten()
+        epsilon = (x[:n_quote] - x[n_quote:]).flatten()
         epsilon /= scale
     else:
         epsilon = []
-        log.warning("Optimal perturbation is not found.")
+        log.warning("Arbitrage repair optimal perturbation is not found.")
 
     return epsilon
 
@@ -249,166 +214,69 @@ def repair_arbitrage(
     normaliser = constraints.Normalise(min_price=min_price)
     normaliser.fit(T=tau, K=strike, C=undisc_mid, F=forward)
     T1, K1, C1 = normaliser.transform(T=tau, K=strike, C=undisc_mid)
-    mat_A, vec_b, _, _ = constraints.detect(T=T1, K=K1, C=C1, tolerance=tolerance, verbose=False)
+    mat_A, vec_b, _, n_beach = constraints.detect(T=T1, K=K1, C=C1, tolerance=tolerance, verbose=False)
 
-    epsilon = _solve_weighted_l1_repair(
-        mat_a=mat_A,
-        vec_b=vec_b,
-        price=C1,
-        weights=df["repair_weight"].to_numpy(dtype=float),
-        solver=solver,
-    )
+    calendart_arbitrage = sum(n_beach[-3:])
+    if calendart_arbitrage > 0:
+        epsilon = _solve_weighted_l1_repair(
+            mat_A=mat_A,
+            vec_b=vec_b,
+            price=C1,
+            weights=None,
+            solver=solver,
+        )
 
-    if len(epsilon) == 0:
-        log.warning("No repair applied to the chain.")
+        if len(epsilon) == 0:
+            log.warning("No repair applied to the chain.")
+            return chain
+
+        # from arbitragerepair import repair
+        # epsilon2 = l1(mat_A, vec_b, C1, solver="glpk")
+        # assert np.allclose(epsilon, epsilon2, atol=1e-6)
+
+        # _, _, _, n_beach_post_retair = constraints.detect(
+        #     T=T1, K=K1, C=C1 + epsilon, tolerance=tolerance, verbose=False
+        # )
+        # if sum(n_beach_post_retair) > 0:
+        #     log.error("Repair arbitrage has failed")
+
+        _, C0 = normaliser.inverse_transform(K=K1, C=C1 + epsilon)
+        df.loc[:, "mid"] = C0 * disc
+        df.loc[:, "repair_adj"] = (C0 - undisc_mid) * disc
+
+    return chain.__class__(df, chain._calendar)
+
+
+def append_synthetic_quotes() -> OptionChain:
+    raise NotImplementedError("Synthetic quote augmentation is not implemented yet.")
+
+
+def min_strikes_per_slice_filter(chain: OptionChain, n: int) -> OptionChain:
+    """Filter out expiry slices with fewer than n unique strikes."""
+    if n <= 1:
         return chain
+    mask = chain.df.groupby("expiry")["strike"].transform("nunique") >= n
 
-    # epsilon2 = repair.l1(mat_A, vec_b, C1)
-    # assert np.allclose(epsilon, epsilon2, atol=1e-10)
+    if not mask.any():
+        msg = f"No expiry slices have at least {n} unique strikes after filtering."
+        raise ValueError(msg)
 
-    _, C0 = normaliser.inverse_transform(K=K1, C=C1 + epsilon)
-    df.loc[:, "mid"] = C0 * disc
-    df.loc[:, "repair_adj"] = (C0 - undisc_mid) * disc
-
-    return chain.__class__(df, chain._calendar)
+    return chain.__class__(chain.df.loc[mask].copy(), chain._calendar)
 
 
-def append_synthetic_quotes(
-    chain: OptionChain,
-    market: LinearEquityMarket,
-    k_min: float,
-    k_max: float,
-    grid_size: int = 41,
-    spline_smoothing: float = 0.0,
-    min_obs_per_slice: int = 3,
-    min_total_variance: float = 1e-8,
-    synthetic_weight: float = 10.0,
-) -> OptionChain:
-    """Append synthetic tail quotes from a global 2D total-variance surface."""
-    _require_call_only(chain)
+def remove_short_span_slices(chain: OptionChain) -> OptionChain:
+    """Remove expiry slices with unusually short strike spans compared to their neighbors."""
+    span = chain.df.groupby("expiry")["strike"].agg(np.ptp).sort_index()
 
-    df = chain.df.copy()
-    df["synthetic"] = df.get("synthetic", False)
-    df["synthetic"] = df["synthetic"].fillna(value=False).astype(bool)
-    df["repair_adj"] = df.get("repair_adj", 0.0)
-    df["repair_adj"] = df["repair_adj"].fillna(0.0).astype(float)
-    df["repair_weight"] = np.where(df["synthetic"], synthetic_weight, 1.0)
+    mean_span = span.mean()
+    rel_span = span / mean_span
+    rel_span_change = rel_span.diff()
 
-    target_grid = _make_quote_grid(k_min, k_max, grid_size)
-    spline, center, scale = _build_rbf_surface(
-        chain=chain,
-        market=market,
-        spline_smoothing=spline_smoothing,
-        min_total_variance=min_total_variance,
-    )
-    synthetic_rows = []
+    mask_mat = (rel_span_change < -0.15) & (rel_span < 0.8)
+    mask_mat.iloc[-1] = False
+    mask = ~chain.df["expiry"].isin(span.index[mask_mat])
 
-    for _, option_slice in chain:
-        if len(option_slice) < min_obs_per_slice:
-            continue
-
-        _, forward, discount = _slice_total_variance(
-            option_slice=option_slice,
-            market=market,
-            min_total_variance=min_total_variance,
-        )
-        observed_k = np.log(option_slice.k / forward)
-        missing_grid = target_grid[(target_grid < observed_k.min()) | (target_grid > observed_k.max())]
-        if missing_grid.size == 0:
-            continue
-
-        synth_total_variance = np.maximum(
-            _evaluate_total_variance_surface(
-                spline=spline,
-                center=center,
-                scale=scale,
-                tau=np.full(missing_grid.shape, option_slice.slice_tau, dtype=float),
-                log_fwd_moneyness=missing_grid,
-            ).reshape(-1),
-            min_total_variance,
-        )
-        synth_sigma = np.sqrt(synth_total_variance / option_slice.slice_tau)
-        synth_strikes = forward * np.exp(missing_grid)
-        synth_mid = _as_float_array(
-            black76_price(
-                df=discount,
-                f=forward,
-                k=synth_strikes,
-                t=option_slice.slice_tau,
-                sigma=synth_sigma,
-                is_call=np.ones_like(synth_strikes, dtype=bool),
-            )
-        )
-
-        template = option_slice.df.iloc[0].copy()
-        for strike_i, mid_i, k_i, total_var_i in zip(
-            synth_strikes,
-            synth_mid,
-            missing_grid,
-            synth_total_variance,
-            strict=True,
-        ):
-            row = template.copy()
-            row["strike"] = float(strike_i)
-            row["mid"] = float(mid_i)
-            row["bid"] = np.nan
-            row["ask"] = np.nan
-            row["option_type"] = "C"
-            row["volume"] = 0
-            if "open_interest" in row.index:
-                row["open_interest"] = 0
-            row["synthetic"] = True
-            row["repair_adj"] = 0.0
-            row["repair_weight"] = synthetic_weight
-            row["synthetic_source"] = "thin_plate_total_variance_2d"
-            row["log_fwd_moneyness"] = float(k_i)
-            row["total_variance"] = float(total_var_i)
-            synthetic_rows.append(row)
-
-    if synthetic_rows:
-        df = pd.concat([df, pd.DataFrame(synthetic_rows)], ignore_index=True)
-
-    return chain.__class__(df, chain._calendar)
-
-
-def liquidity_filter(
-    chain: OptionChain,
-    oi_min: None | int = None,
-    bid_min: None | float = None,
-    mid_min: None | float = None,
-    rel_bid_ask_max: None | float = None,
-    min_ttm: None | int = None,
-    min_k_per_slice: int = 3,
-) -> OptionChain:
-    """Filter an option chain for liquid contracts."""
-    df = chain.df.copy()
-
-    # Liquidity filters
-    mask = pd.Series(data=True, index=df.index)
-    if oi_min is not None:
-        mask &= (df["open_interest"].notna()) & (df["open_interest"] >= oi_min)
-    if bid_min is not None:
-        mask &= (df["bid"].notna()) & (df["bid"] >= bid_min)
-    if mid_min is not None:
-        mask &= (df["mid"].notna()) & (df["mid"] >= mid_min)
-    if rel_bid_ask_max is not None:
-        if (df["mid"].isna().any()) or (df["mid"] <= 0).any():
-            msg = "Relative bid-ask spread filtering requires mid prices to be positive."
-            raise ValueError(msg)
-        mask &= ((df["ask"] - df["bid"]) / df["mid"]) <= rel_bid_ask_max
-    if min_ttm is not None:
-        anchor_days = df["anchor"].to_numpy(dtype="datetime64[D]")
-        expiry_days = df["expiry"].to_numpy(dtype="datetime64[D]")
-        mask &= np.busday_count(anchor_days, expiry_days) >= min_ttm
-
-    df = df.loc[mask, :]
-
-    # Ensure each slice has at least min_k_per_slice strikes
-    slice_mask = pd.Series(data=True, index=df.index)
-    if min_k_per_slice > 1:
-        slice_mask &= df.groupby("expiry")["strike"].transform("nunique") >= min_k_per_slice
-
-    return chain.__class__(df.loc[slice_mask].copy(), chain._calendar)
+    return chain.__class__(chain.df.loc[mask].copy(), chain._calendar)
 
 
 def make_otm_to_call(chain: OptionChain, le: LinearEquityMarket) -> OptionChain:
@@ -423,18 +291,148 @@ def make_otm_to_call(chain: OptionChain, le: LinearEquityMarket) -> OptionChain:
 
     # OTM puts to ITM calls using put-call parity
     puts = df.loc[is_otm_p, :]
-    p_mid = chain.mid[is_otm_p]
     p_tau = chain.tau[is_otm_p]
     p_fwd_contract = le.df(p_tau) * (le.fwd(p_tau) - puts["strike"])
 
     puts = puts.assign(
         option_type="C",
-        bid=np.nan,
-        ask=np.nan,
-        mid=p_fwd_contract + p_mid,
+        quote_type="synthetic",
+        bid=p_fwd_contract + chain.bid[is_otm_p],
+        ask=p_fwd_contract + chain.ask[is_otm_p],
+        mid=p_fwd_contract + chain.mid[is_otm_p],
     )
 
     return chain.__class__(pd.concat([calls, puts], ignore_index=True), chain._calendar)
+
+
+def _filter_informative_values(
+    values: np.ndarray,
+    priority: np.ndarray,
+    removable: np.ndarray,
+    min_distance: float = 0.01,
+    max_distance: float | None = None,
+) -> np.ndarray:
+    """Filter out values that are too close to their neighbors, keeping those with higher priority."""
+    n = values.size
+    active = np.ones(n, dtype=bool)
+    prev_idx = np.arange(n) - 1
+    next_idx = np.arange(n) + 1
+    next_idx[-1] = -1
+
+    for i in np.argsort(priority):
+        if (not active[i]) or (not removable[i]):
+            continue
+
+        left_idx = prev_idx[i]
+        right_idx = next_idx[i]
+
+        if left_idx == -1 or right_idx == -1:
+            continue
+
+        nearest_distance = min(
+            np.log(values[i] / values[left_idx]),
+            np.log(values[right_idx] / values[i]),
+        )
+        if nearest_distance < min_distance:
+            active[i] = False
+            if left_idx != -1:
+                next_idx[left_idx] = right_idx
+            if right_idx != -1:
+                prev_idx[right_idx] = left_idx
+
+    if max_distance is not None:
+        for i in np.argsort(-priority):
+            if not active[i]:
+                continue
+
+            left_idx = prev_idx[i]
+            right_idx = next_idx[i]
+
+            if left_idx == -1 or right_idx == -1:
+                continue
+
+            furthest_distance = max(
+                np.log(values[i] / values[left_idx]),
+                np.log(values[right_idx] / values[i]),
+            )
+            if furthest_distance < max_distance:
+                active[i] = False
+                if left_idx != -1:
+                    next_idx[left_idx] = right_idx
+                if right_idx != -1:
+                    prev_idx[right_idx] = left_idx
+
+    return active
+
+
+def soft_liquidity_filter(
+    chain: OptionChain,
+    lin_mkt: LinearEquityMarket,
+    oi_soft_min: int = 50,
+    rel_bid_ask_soft_max: float = 0.20,
+    min_lk_distance: float = 0.05,
+    max_lk_distance: float | None = None,
+) -> OptionChain:
+    """Drop low-liquidity near-duplicate quotes."""
+    iv_mid, iv_bid, iv_ask = [
+        implied_vol(
+            price=p,
+            strike=chain.k,
+            tau=chain.tau,
+            fwd=lin_mkt.fwd(chain.tau),
+            disc=lin_mkt.df(chain.tau),
+            option_type=chain.option_type == "C",
+        )
+        for p in (chain.mid, chain.bid, chain.ask)
+    ]
+
+    # Remove qotes with invalid mid implied volatility
+    mask0 = ~(np.isnan(iv_mid) | np.isinf(iv_mid) | (iv_mid < 1e-2) | (iv_mid > 2.0))
+
+    df = chain.df[mask0].copy()
+    mask = np.ones(df.shape[0], dtype=bool)
+    iv_mid, iv_bid, iv_ask, tau = iv_mid[mask0], iv_bid[mask0], iv_ask[mask0], chain.tau[mask0]
+
+    strike = df["strike"].to_numpy()
+    open_int = df["open_interest"].fillna(0.0).to_numpy()
+    rel_bid_ask = np.nan_to_num((iv_ask - iv_bid) / iv_mid, nan=np.inf)
+
+    def _piecewise_score(x: np.ndarray, bounds: tuple[float, float, float]) -> np.ndarray:
+        x_min, x_mid, x_max = bounds
+        score = np.where(
+            x <= x_mid,
+            0.5 * (x - x_min) / (x_mid - x_min),
+            0.5 + 0.5 * (x - x_mid) / (x_max - x_mid),
+        )
+        return np.clip(score, 0.0, 1.0)
+
+    oi_score = _piecewise_score(open_int, (0.0, oi_soft_min, 500))
+    spread_score = _piecewise_score(-rel_bid_ask, (-1, -rel_bid_ask_soft_max, 0.01))
+    liquidity_score = (oi_score + spread_score) / 2.0
+
+    is_removable = (open_int < oi_soft_min) | (rel_bid_ask > rel_bid_ask_soft_max)
+
+    for _, grp in df.groupby("expiry", sort=False):
+        idx = grp.index.to_numpy()
+
+        if idx.size < 3:
+            continue
+
+        sqrt_tau = np.sqrt(float(tau[idx[0]]))
+        order_k = np.argsort(strike[idx])
+        idx_sorted = idx[order_k]
+
+        active = _filter_informative_values(
+            values=strike[idx_sorted],
+            priority=liquidity_score[idx_sorted],
+            removable=is_removable[idx_sorted],
+            min_distance=min_lk_distance * sqrt_tau,
+            max_distance=max_lk_distance * sqrt_tau if max_lk_distance is not None else None,
+        )
+
+        mask[idx_sorted[~active]] = False
+
+    return OptionChain(df[mask].copy(), chain._calendar)
 
 
 def get_atmf_vol(sl: OptionSlice, le: LinearEquityMarket) -> float:
@@ -457,7 +455,7 @@ def get_atmf_vol(sl: OptionSlice, le: LinearEquityMarket) -> float:
     z = np.polyfit(strike[mask], price[mask], deg)
     atm_price = np.poly1d(z)(fwd)
 
-    vol = implied_vol_jackel(
+    return implied_vol_jackel(
         price=atm_price,
         f=fwd,
         k=fwd,
@@ -465,8 +463,6 @@ def get_atmf_vol(sl: OptionSlice, le: LinearEquityMarket) -> float:
         df=le.df(tau),
         is_call=True,
     )
-
-    return vol
 
 
 def apply_cutoffs(
@@ -502,3 +498,156 @@ def apply_cutoffs(
         filtered_frames.append(sl.df.loc[mask].copy())
 
     return chain.__class__(pd.concat(filtered_frames, ignore_index=True), chain._calendar)
+
+
+def _collect_slice_data(
+    chain: OptionChain,
+    market: LinearEquityMarket,
+    min_total_variance: float,
+) -> list[dict]:
+    """Build per-slice boundary data (sorted by log-moneyness within each slice)."""
+    slices: list[dict] = []
+    for expiry, sl in chain:
+        tau = sl.slice_tau
+        fwd = _as_scalar(market.fwd(tau))
+        disc = _as_scalar(market.df(tau))
+        total_var, _, _ = _slice_total_variance(sl, market, min_total_variance)
+        log_m = np.log(np.asarray(sl.k, dtype=float) / fwd)
+        order = np.argsort(log_m)
+        slices.append(
+            {
+                "expiry": expiry,
+                "tau": tau,
+                "fwd": fwd,
+                "disc": disc,
+                "log_m": log_m[order],
+                "total_var": total_var[order],
+                "price_norm": sl.mid[order] / (disc * fwd),
+            }
+        )
+    return slices
+
+
+def _sweep_one_wing(
+    slice_data: list[dict],
+    m_range: tuple[float, float],
+) -> list[tuple[float, float, float]]:
+    """Single-threshold carry-forward sweep for one wing."""
+    if len(m_range) != 2:
+        msg = f"m_range must be a tuple of (lower_bound, upper_bound), got {m_range}."
+        raise ValueError(msg)
+    if np.sign(m_range[0]) != np.sign(m_range[1]) and math.prod(m_range) != 0:
+        msg = f"m_range bounds must have the same sign, got {m_range}."
+        raise ValueError(msg)
+
+    m0, m1 = min(m_range), max(m_range)
+
+    synthetics = []
+    carry_fwd = None
+
+    def _get_range_idx(m0, m1) -> np.ndarray:
+        if np.sign(m1) == 0:
+            if np.isfinite(m1):
+                return -1
+            return 0
+        if np.isfinite(m0):
+            return 0
+        return -1
+
+    point_idx = _get_range_idx(m0, m1)
+
+    for i, cur in enumerate(slice_data):
+        if i == 0:
+            continue
+
+        prev = slice_data[i - 1]
+
+        cur_mask = (cur["log_m"] > m0) & (cur["log_m"] <= m1)
+        prev_mask = (prev["log_m"] > m0) & (prev["log_m"] <= m1)
+
+        if cur_mask.any():
+            carry_fwd = None
+        elif not prev_mask.any() and carry_fwd is not None:
+            synthetics.append((cur["tau"], *carry_fwd))
+        elif prev_mask.any():
+            idx = np.argsort(prev["log_m"][prev_mask])[point_idx]
+
+            ref_m = float(prev["log_m"][prev_mask][idx])
+            ref_tv = float(prev["total_var"][prev_mask][idx])
+            ref_price_norm = float(prev["price_norm"][prev_mask][idx])
+
+            synthetics.append((cur["tau"], ref_m, ref_price_norm, ref_tv))
+            carry_fwd = (ref_m, ref_price_norm, ref_tv)
+
+    return synthetics
+
+
+def get_calendar_arb_upper_bounds(
+    chain: OptionChain,
+    market: LinearEquityMarket,
+    lm_bounds: tuple[float, float] = (-0.6, 0.6),
+    min_total_variance: float = 1e-8,
+) -> NoArbBounds:
+    """Build a synthetic OptionChain of boundary quotes preventing calendar arbitrage."""
+    _require_call_only(chain)
+    m_lb, m_ub = lm_bounds
+
+    slice_data = _collect_slice_data(chain, market, min_total_variance)
+    slice_data.sort(key=lambda s: s["tau"], reverse=True)
+    expiry_info = {s["expiry"]: s for s in slice_data}
+
+    raw = []
+
+    step_size = 0.1
+    lw_points = np.concatenate(
+        [
+            [-np.inf],
+            np.linspace(m_lb, 0.0, num=1 + math.ceil((0.0 - m_lb) / step_size)),
+        ]
+    )[:, None]
+    rw_points = np.concatenate(
+        [
+            np.linspace(0.0, m_ub, num=1 + math.ceil((m_ub - 0.0) / step_size)),
+            [np.inf],
+        ]
+    )[:, None]
+
+    intervals_arr = np.vstack(
+        [
+            np.hstack([lw_points[:-1], lw_points[1:]]),
+            np.hstack([rw_points[:-1], rw_points[1:]]),
+        ]
+    )
+
+    for i in list(map(tuple, intervals_arr)):
+        raw.extend(_sweep_one_wing(slice_data, i))
+
+    if not raw:
+        return NoArbBounds(pd.DataFrame())
+
+    # Build rows for the synthetic OptionChain
+    tau_to_expiry = {s["tau"]: s["expiry"] for s in slice_data}
+
+    rows = []
+    for tau, lm, price_norm, _ in raw:
+        info = expiry_info[tau_to_expiry[tau]]
+        fwd, _ = info["fwd"], info["disc"]
+        strike = fwd * np.exp(lm)
+        rows.append(
+            {
+                "expiry": tau_to_expiry[tau],
+                "strike": float(strike),
+                "lkf": float(lm),
+                "tau": float(tau),
+                "option_type": "C",
+                "price_norm_ub": price_norm,
+                "price_norm_lb": np.nan,
+            }
+        )
+
+    if not rows:
+        return None
+
+    df = pd.DataFrame(rows).sort_values(["expiry", "strike"], ignore_index=True)
+
+    return NoArbBounds(df)

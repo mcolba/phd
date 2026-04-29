@@ -13,7 +13,7 @@ from vol_risk.calibration.option_chain import OptionChain
 
 logger = logging.getLogger(__name__)
 
-N_MIN = 8
+N_MIN = 5
 
 
 @dataclass(frozen=True)
