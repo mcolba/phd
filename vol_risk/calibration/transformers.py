@@ -125,7 +125,7 @@ def liquidity_filter(
 
 
 def _solve_weighted_l1_repair(
-    mat_A: np.ndarray,
+    mat_A: np.ndarray,  # noqa: N803
     vec_b: np.ndarray,
     price: np.ndarray,
     weights: np.ndarray | None = None,
@@ -248,7 +248,7 @@ def repair_arbitrage(
 
 
 def append_synthetic_quotes() -> OptionChain:
-    raise NotImplementedError("Synthetic quote augmentation is not implemented yet.")
+    raise NotImplementedError
 
 
 def min_strikes_per_slice_filter(chain: OptionChain, n: int) -> OptionChain:
@@ -542,7 +542,6 @@ def _sweep_one_wing(
 
     m0, m1 = min(m_range), max(m_range)
 
-    synthetics = []
     carry_fwd = None
 
     def _get_range_idx(m0, m1) -> np.ndarray:
@@ -556,6 +555,7 @@ def _sweep_one_wing(
 
     point_idx = _get_range_idx(m0, m1)
 
+    synthetics = []
     for i, cur in enumerate(slice_data):
         if i == 0:
             continue
@@ -573,11 +573,11 @@ def _sweep_one_wing(
             idx = np.argsort(prev["log_m"][prev_mask])[point_idx]
 
             ref_m = float(prev["log_m"][prev_mask][idx])
-            ref_tv = float(prev["total_var"][prev_mask][idx])
+            # ref_tv = float(prev["total_var"][prev_mask][idx])
             ref_price_norm = float(prev["price_norm"][prev_mask][idx])
 
-            synthetics.append((cur["tau"], ref_m, ref_price_norm, ref_tv))
-            carry_fwd = (ref_m, ref_price_norm, ref_tv)
+            synthetics.append((cur["tau"], ref_m, ref_price_norm))
+            carry_fwd = (ref_m, ref_price_norm)
 
     return synthetics
 
@@ -623,13 +623,13 @@ def get_calendar_arb_upper_bounds(
         raw.extend(_sweep_one_wing(slice_data, i))
 
     if not raw:
-        return NoArbBounds(pd.DataFrame())
+        return None
 
     # Build rows for the synthetic OptionChain
     tau_to_expiry = {s["tau"]: s["expiry"] for s in slice_data}
 
     rows = []
-    for tau, lm, price_norm, _ in raw:
+    for tau, lm, price_norm in raw:
         info = expiry_info[tau_to_expiry[tau]]
         fwd, _ = info["fwd"], info["disc"]
         strike = fwd * np.exp(lm)
@@ -649,5 +649,16 @@ def get_calendar_arb_upper_bounds(
         return None
 
     df = pd.DataFrame(rows).sort_values(["expiry", "strike"], ignore_index=True)
+
+    def _force_monotonicity(df: pd.DataFrame, name="price_norm_ub") -> pd.DataFrame:
+        """Force the upper bound to be non-increasing in log-moneyness."""
+        _df = df.set_index(["expiry", "lkf"])[name].to_frame().copy()
+
+        pt = _df.pivot_table(index=["expiry"], columns=["lkf"], values=[name]).fillna(np.inf)
+        pt = np.minimum.accumulate(pt, axis=1)
+        pt.iloc[::-1, :] = np.minimum.accumulate(pt.iloc[::-1, :], axis=0)
+        return pt.stack().loc[_df.index].to_numpy()  # noqa: PD013
+
+    df["price_norm_ub"] = _force_monotonicity(df, "price_norm_ub")
 
     return NoArbBounds(df)
