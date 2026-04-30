@@ -1,6 +1,9 @@
+---
+applyTo: "**/*.py"
+---
 # Style Guidance
 
-## Lenguage Rules
+## Python Lenguage Rules
 - Use type hints for all functions' inputs and outputs.
 - Avoid mutable global states.
   

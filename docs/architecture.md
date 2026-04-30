@@ -1,11 +1,15 @@
+---
+applyTo: "vol_risk/**/*.py"
+---
 # Architecture Guidance
 
 ## Core Principles
 
-- Define model, calibration, and risk APIs through [vol_risk/protocols.py](../vol_risk/protocols.py).
-- Keep core numerical kernels pure, deterministic, vectorized, and side-effect free.
-- Keep wrappers thin: validation, shape normalization, logging, and orchestration only.
-- Add or update tests for every behavior change.
+- Adhere to the single responsability principle.
+- Use core numerical kernels that are pure, deterministic, vectorized, and side-effect free.
+- Use thin wrappers for validation, shape normalization, logging, and orchestration.
+- Adhere to contracts definded in [vol_risk/protocols.py](../vol_risk/protocols.py).
+
 
 ## Design Patterns
 
