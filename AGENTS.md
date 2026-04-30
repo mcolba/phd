@@ -1,5 +1,5 @@
 ---
-applyTo: "vol_risk/**/*.py"
+applyTo: "**/*.py"
 ---
 ## Overview
 
