@@ -81,7 +81,7 @@ def main() -> None:
     log.info("Opening parquet dataset at %s", INPUT_PATH)
     dataset = ds.dataset(str(INPUT_PATH), format="parquet", partitioning="hive")
 
-    dates_str = sorted(ds.get_partition_keys(frag.partition_expression)["date"] for frag in dataset.get_fragments())
+    dates_str = sorted({ds.get_partition_keys(frag.partition_expression)["date"] for frag in dataset.get_fragments()})
     log.info("Dates to calibrate: %d", len(dates_str))
 
     with shelve.open(str(OUTPUT_PATH)) as db:

@@ -20,7 +20,7 @@ log = logging.getLogger(__name__)
 
 SIGMA_MAX = 4.0
 SIGMA_MIN = 0.03
-THETA_1_EPSILON = 0.1
+THETA_1_EPSILON = 0.05
 THETA_2_EPSILON = 0.15
 
 
@@ -301,7 +301,7 @@ BIJECTION_METHODS = {
     "totvar_simplex": lambda x: make_full_encoder_totvar(x, method="simplex"),
 }
 
-BIJECTION_FALLBACK = {
+BIJECTION_1ST_SLICE_FALLBACK = {
     "totvar": "base",
     "totvar_simplex": "simplex",
 }
@@ -328,7 +328,7 @@ BOUNDS_METHODS = {
         np.concatenate(
             [
                 np.repeat(0 + THETA_1_EPSILON, n - 1),
-                np.repeat(-np.inf, n - 1),
+                np.repeat(0 + THETA_2_EPSILON, n - 1),
                 np.repeat(sigma_min, n),
             ]
         ),
@@ -416,20 +416,21 @@ def _smirk_start_guess(n: int, sigma_atm: float, tau: float) -> LogNormMixParams
         msg = "Number of components must be at least 2."
         raise ValueError(msg)
 
-    # Assign smaller weight to the leftmost component
-    w_left = 1 / (n * 3)
-    w_right = np.repeat((1 - w_left) / (n - 1), n - 1)
+    # Assign 5% weight to the first component and increasing weights thereafter
+    w_left = 0.05
+    w_scale = np.linspace(0.6, 1, n - 1)
+    w_right = (1 - w_left) * w_scale / w_scale.sum()
     w0 = np.concatenate(([w_left], w_right))
 
-    # Assignincreasing mu values
-    exp_mu_min = 0.85
+    # Assign increasing mu
+    exp_mu_min = 0.8
     exp_mu_left = np.linspace(exp_mu_min, 1, n - 1)
     partial_sum = np.dot(w0[:-1], exp_mu_left)
     exp_mu_right = (1 - partial_sum) / w0[-1]
     mu0 = np.log(np.concatenate([exp_mu_left, [exp_mu_right]])) / tau
 
-    # Assign decreasing sigma values
-    sigma0 = np.clip(piecewise_linspace([sigma_atm * 3, sigma_atm, sigma_atm * 0.5], n), SIGMA_MIN, SIGMA_MAX)
+    # Assign decreasing sigma
+    sigma0 = np.clip(piecewise_linspace([sigma_atm * 2, sigma_atm, sigma_atm * 0.5], n), SIGMA_MIN, SIGMA_MAX)
 
     return LogNormMixParams(w0, mu0, sigma0)
 
@@ -441,7 +442,7 @@ def _uninformative_start_guess(n: int, sigma_atm: float, tau: float) -> LogNormM
         raise ValueError(msg)
 
     w0 = np.repeat(1 / n, n)
-    exp_mu_min = 0.85
+    exp_mu_min = 0.8
     exp_mu_max = 2 - exp_mu_min
     mu0 = np.log(np.linspace(exp_mu_min, exp_mu_max, n)) / tau
     sigma0 = np.clip(np.repeat(sigma_atm, n), SIGMA_MIN, SIGMA_MAX)
@@ -469,7 +470,7 @@ def calib_mixture_smile(
     lambda_w: float = 0.0,
     lambda_mu: float = 0.0,
     lambda_sigma: float = 0.0,
-    lambda_calendar_arb: float = 0.0,
+    lambda_ca_bounds: float = 0.0,
     pdef: float = 0.0,
     sigma_atm: float = 0.2,
     no_arb_bounds: pd.DataFrame | None = None,
@@ -553,15 +554,17 @@ def calib_mixture_smile(
                 pdef=pdef,
             ) / (fwd * df)
             prices_ub = no_arb_bounds["price_norm_ub"].to_numpy()
-            arbitrage = softplus(prices_norm - prices_ub, beta=1e-6)
+            arb_loss_weight = no_arb_bounds["weight"].to_numpy()
+
+            arb_upper = softplus(arb_loss_weight * (prices_norm - prices_ub), beta=1e-8)
+            residuals = np.concatenate([residuals, arb_upper])
+            weights = np.concatenate([weights, np.repeat(np.sqrt(lambda_ca_bounds), arb_upper.size)])
 
             if "price_norm_lb" in no_arb_bounds.columns:
                 prices_lb = no_arb_bounds["price_norm_lb"].to_numpy()
-                arbitrage_lb = softplus(prices_lb - prices_norm, beta=1e-6)
-                arbitrage = np.concatenate([arbitrage, arbitrage_lb])
-
-            residuals = np.concatenate([residuals, arbitrage])
-            weights = np.concatenate([weights, np.repeat(lambda_calendar_arb, arbitrage.size)])
+                arb_lower = softplus(arb_loss_weight * (prices_lb - prices_norm), beta=1e-8)
+                residuals = np.concatenate([residuals, arb_lower])
+                weights = np.concatenate([weights, np.repeat(np.sqrt(lambda_ca_bounds), arb_lower.size)])
 
         return weights * residuals
 
@@ -653,10 +656,10 @@ def _vega_weights(opt: OptionChainLike, line_mkt: LinearEquityMarket) -> np.ndar
             for mid, k, tau, is_call, disc, fwd in zip(mid, k, tau, is_call, disc, fwd, strict=True)
         ],
         dtype=float,
-    ).clip(0.01, 1.5)
+    ).clip(0.02, 1.5)
 
     vega = black76_vega(df=disc, f=fwd, k=k, t=tau, sigma=iv)
-    return 1 / np.maximum(vega, 1e-4)
+    return 1 / np.maximum(vega, 1e-6)
 
 
 def calib_mixture_ivs(
@@ -671,6 +674,7 @@ def calib_mixture_ivs(
     lambda_smoothing: float = 0.0,
     lambda_tm1_params: tuple[float, float, float] = (0.0, 0.0, 0.0),
     calendar_arb_bounds: NoArbBounds | None = None,
+    lambda_ca_bounds: float = 0.0,
 ) -> tuple[VolSurface, LogNormMixParams]:
     """Calibrate a log-normal mixture model to each expiry slice."""
     if transform_method not in BIJECTION_METHODS:
@@ -719,15 +723,11 @@ def calib_mixture_ivs(
             raise ValueError(msg)
 
         if prev_params is None:
-            # p0 = _smirk_start_guess(n_components, sigma_atm=sigma_atm, tau=tau)
-            # p0 = _uninformative_start_guess(n_components, sigma_atm=sigma_atm, tau=tau)
-            p0 = INITIAL_GUESS_METHODS[t0_start_guess](n_components, sigma_atm=sigma_atm, tau=tau)
+            make_initial_guess = INITIAL_GUESS_METHODS[t0_start_guess]
+            p0 = make_initial_guess(n_components, sigma_atm=sigma_atm, tau=tau)
             lambda_w = lambda_mu = lambda_sigma = 0.0
-            transform_method_ = BIJECTION_FALLBACK.get(transform_method, transform_method)
-            if transform_method_ != transform_method:
-                msg = f""" Transform method '{transform_method}' is not supported for the first slice.
-                Falling back to '{transform_method_}'."""
-                log.info(msg)
+
+            transform_method_ = BIJECTION_1ST_SLICE_FALLBACK.get(transform_method, transform_method)
         else:
             transform_method_ = transform_method
             p0 = _force_mu_to_unit_sum(prev_params, tau)
@@ -770,7 +770,7 @@ def calib_mixture_ivs(
             lambda_mu=lambda_mu,
             lambda_sigma=lambda_sigma,
             transform_method=transform_method_,
-            lambda_calendar_arb=mkt.spot,
+            lambda_ca_bounds=lambda_ca_bounds,
             lambda_smoothing=lambda_smoothing,
             sigma_atm=sigma_atm,
             no_arb_bounds=bounds_df,

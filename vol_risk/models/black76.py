@@ -208,18 +208,18 @@ def implied_vol(
     tau: ArrayLike,
     fwd: ArrayLike,
     disc: ArrayLike,
-    option_type: ArrayLike,
+    is_call: ArrayLike,
 ) -> np.ndarray:
     """Calculate implied volatilities using Jaeckel's method."""
     price = np.asarray(price, dtype=float)
     flat_price = price.ravel()
 
-    flat_strike, flat_tau, flat_fwd, flat_disc, flat_option_type = _broadcast_and_flatten(
-        strike, tau, fwd, disc, option_type, shape=price.shape
+    flat_strike, flat_tau, flat_fwd, flat_disc, flat_is_call = _broadcast_and_flatten(
+        strike, tau, fwd, disc, is_call, shape=price.shape
     )
 
-    if option_type.dtype != bool:
-        msg = "option_type must be a boolean array where True indicates call options and False indicates put options."
+    if flat_is_call.dtype != bool:
+        msg = "is_call must be a boolean array where True indicates call options and False indicates put options."
         raise ValueError(msg)
 
     n = flat_price.size
@@ -231,7 +231,7 @@ def implied_vol(
             k=flat_strike[i],
             t=flat_tau[i],
             df=flat_disc[i],
-            is_call=flat_option_type[i],
+            is_call=flat_is_call[i],
         )
 
     return iv.reshape(price.shape)

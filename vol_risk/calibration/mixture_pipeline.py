@@ -75,6 +75,7 @@ class MixtureCalibConfig:
     transform_method: str = "totvar_simplex"
     t0_start_guess: str = "uninformative"
     use_calendar_arb_bounds: bool = False
+    lambda_ca_bounds: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -190,6 +191,8 @@ def run_mixture_pipeline(
         lambda_tm1_params=config.lambda_tm1_params,
         lambda_smoothing=config.lambda_smoothing,
         calendar_arb_bounds=calendar_arb_bounds,
+        lambda_ca_bounds=config.lambda_ca_bounds,
+        t0_start_guess=config.t0_start_guess,
     )
 
     elapsed = time.time() - start_time

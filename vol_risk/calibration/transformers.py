@@ -230,7 +230,7 @@ def repair_arbitrage(
             log.warning("No repair applied to the chain.")
             return chain
 
-        # from arbitragerepair import repair
+        # from arbitragerepair import l1
         # epsilon2 = l1(mat_A, vec_b, C1, solver="glpk")
         # assert np.allclose(epsilon, epsilon2, atol=1e-6)
 
@@ -381,7 +381,7 @@ def soft_liquidity_filter(
             tau=chain.tau,
             fwd=lin_mkt.fwd(chain.tau),
             disc=lin_mkt.df(chain.tau),
-            option_type=chain.option_type == "C",
+            is_call=chain.option_type == "C",
         )
         for p in (chain.mid, chain.bid, chain.ask)
     ]
@@ -633,6 +633,20 @@ def get_calendar_arb_upper_bounds(
         info = expiry_info[tau_to_expiry[tau]]
         fwd, _ = info["fwd"], info["disc"]
         strike = fwd * np.exp(lm)
+        sigma = np.clip(
+            implied_vol(
+                price=price_norm * info["disc"] * fwd,
+                strike=strike,
+                tau=tau,
+                fwd=fwd,
+                disc=info["disc"],
+                is_call=True,
+            ),
+            0.02,
+            1.5,
+        )
+        vega = black76_vega(df=info["disc"], f=fwd, k=strike, t=tau, sigma=sigma)
+        weight = info["disc"] * fwd / max(vega, 1e-6)
         rows.append(
             {
                 "expiry": tau_to_expiry[tau],
@@ -642,6 +656,7 @@ def get_calendar_arb_upper_bounds(
                 "option_type": "C",
                 "price_norm_ub": price_norm,
                 "price_norm_lb": np.nan,
+                "weight": float(weight),
             }
         )
 
@@ -657,7 +672,7 @@ def get_calendar_arb_upper_bounds(
         pt = _df.pivot_table(index=["expiry"], columns=["lkf"], values=[name]).fillna(np.inf)
         pt = np.minimum.accumulate(pt, axis=1)
         pt.iloc[::-1, :] = np.minimum.accumulate(pt.iloc[::-1, :], axis=0)
-        return pt.stack().loc[_df.index].to_numpy()  # noqa: PD013
+        return pt.stack(future_stack=True).loc[_df.index].to_numpy()  # noqa: PD013
 
     df["price_norm_ub"] = _force_monotonicity(df, "price_norm_ub")
 

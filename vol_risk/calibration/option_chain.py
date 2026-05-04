@@ -193,7 +193,7 @@ def _has_positive_time_value(df: pd.DataFrame) -> bool:
 
 
 def _has_no_calendar_arb_upper_bound(df: pd.DataFrame, tollerance: float = 1e-8) -> bool:
-    """Require next paturity more-ITM call to dominate earlier."""
+    """Require next maturity more-ITM call to dominate earlier."""
     if df.empty:
         return True
 
@@ -236,6 +236,7 @@ no_arb_schema = DataFrameSchema(
         "option_type": Column(str, Check.isin(["C", "P"]), required=True),
         "price_norm_ub": Column(float, required=True, nullable=True),
         "price_norm_lb": Column(float, required=True, nullable=True),
+        "weight": Column(float, required=True, nullable=True, default=1.0),
     },
     checks=[
         Check(_has_positive_time_value, error="Normalized prices must have positive time value."),
@@ -273,9 +274,9 @@ class NoArbBounds:
     @property
     def call_ub(self) -> pd.DataFrame:
         mask = self._df["price_norm_ub"].notna() & self._df["option_type"].eq("C")
-        return self._df.loc[mask, ["expiry", "strike", "price_norm_ub"]]
+        return self._df.loc[mask, ["expiry", "strike", "price_norm_ub", "weight"]]
 
     @property
     def call_lb(self) -> pd.DataFrame:
         mask = self._df["price_norm_lb"].notna() & self._df["option_type"].eq("C")
-        return self._df.loc[mask, ["expiry", "strike", "price_norm_lb"]]
+        return self._df.loc[mask, ["expiry", "strike", "price_norm_lb", "weight"]]

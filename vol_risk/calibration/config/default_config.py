@@ -33,3 +33,4 @@ class MixtureCalibIndexConfig(MixtureCalibConfig):
     lw_type = "vega_and_spread"
     transform_method = "totvar_simplex"
     use_calendar_arb_bounds = True
+    lambda_ca_bounds = 10

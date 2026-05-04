@@ -72,6 +72,7 @@ if __name__ == "__main__":
         soft_liquidity_filter=True,
         remove_short_span_slices=True,
         use_calendar_arb_bounds=True,
+        lambda_ca_bounds=10,
         liquidity_filter=ChainFilter(
             oi_min=1,
             bid_min=0.01,
