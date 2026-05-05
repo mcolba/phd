@@ -12,11 +12,12 @@ import pandas as pd
 from vol_risk.models.black76 import (
     black76_fwd_delta,
     black76_price,
+    black76_undisc_fwd_delta,
     black76_undisc_fwd_delta_to_strike,
     black76_vega,
     bsm_price,
     bsm_spot_delta,
-    implied_vol_jackel,
+    implied_vol,
     implied_vol_simple,
 )
 
@@ -34,11 +35,11 @@ class TestBlack76(unittest.TestCase):
     def test_black76_price(self) -> None:
         expected = self.df.price
         result = black76_price(
-            df=self.df.DF,
-            f=self.df.F,
-            k=self.df.K,
-            t=self.df.tau,
+            fwd=self.df.F,
+            strike=self.df.K,
+            tau=self.df.tau,
             sigma=self.df.sigma,
+            disc=self.df.DF,
             is_call=self.df.is_call,
         )
         np.testing.assert_allclose(result, expected, rtol=1e-10, atol=1e-12)
@@ -46,9 +47,9 @@ class TestBlack76(unittest.TestCase):
     def test_bsm_price(self) -> None:
         expected = self.df.price
         result = bsm_price(
-            s=self.df.S,
-            k=self.df.K,
-            t=self.df.tau,
+            spot=self.df.S,
+            strike=self.df.K,
+            tau=self.df.tau,
             sigma=self.df.sigma,
             r=self.df.r,
             q=self.df.q,
@@ -59,11 +60,32 @@ class TestBlack76(unittest.TestCase):
     def test_black76_fwd_delta(self) -> None:
         adj = np.exp((self.df.q - self.df.r) * self.df.tau)
         expected = self.df.delta * adj
+        undisc_delta = black76_undisc_fwd_delta(
+            fwd=self.df.F,
+            strike=self.df.K,
+            tau=self.df.tau,
+            sigma=self.df.sigma,
+            is_call=self.df.is_call,
+        )
         result = black76_fwd_delta(
-            f=self.df.F,
-            k=self.df.K,
-            t=self.df.tau,
-            r=self.df.r,
+            fwd=self.df.F,
+            strike=self.df.K,
+            tau=self.df.tau,
+            sigma=self.df.sigma,
+            disc=self.df.DF,
+            is_call=self.df.is_call,
+        )
+        np.testing.assert_allclose(result, self.df.DF * undisc_delta, rtol=1e-12, atol=1e-12)
+        np.testing.assert_allclose(result, expected, rtol=1e-10, atol=1e-12)
+
+    def test_black76_undisc_fwd_delta(self) -> None:
+        disc = np.exp(-self.df.r * self.df.tau)
+        adj = np.exp((self.df.q - self.df.r) * self.df.tau)
+        expected = self.df.delta * adj / disc
+        result = black76_undisc_fwd_delta(
+            fwd=self.df.F,
+            strike=self.df.K,
+            tau=self.df.tau,
             sigma=self.df.sigma,
             is_call=self.df.is_call,
         )
@@ -72,9 +94,9 @@ class TestBlack76(unittest.TestCase):
     def test_bsm_spot_delta(self) -> None:
         expected = self.df.delta
         result = bsm_spot_delta(
-            s=self.df.S,
-            k=self.df.K,
-            t=self.df.tau,
+            spot=self.df.S,
+            strike=self.df.K,
+            tau=self.df.tau,
             r=self.df.r,
             q=self.df.q,
             sigma=self.df.sigma,
@@ -86,37 +108,39 @@ class TestBlack76(unittest.TestCase):
         # Dataset vega is per 1 vol point (i.e., 0.01 sigma).
         expected = self.df.vega
         result = 0.01 * black76_vega(
-            df=self.df.DF,
-            f=self.df.F,
-            k=self.df.K,
-            t=self.df.tau,
+            fwd=self.df.F,
+            strike=self.df.K,
+            tau=self.df.tau,
             sigma=self.df.sigma,
+            disc=self.df.DF,
         )
         np.testing.assert_allclose(result, expected, rtol=1e-10, atol=1e-12)
 
     def test_implied_vol_newton(self) -> None:
         expected = self.df.sigma
         result = implied_vol_simple(
-            df=self.df.DF,
-            f=self.df.F,
-            k=self.df.K,
-            t=self.df.tau,
-            p=self.df.price,
+            price=self.df.price,
+            fwd=self.df.F,
+            strike=self.df.K,
+            tau=self.df.tau,
+            disc=self.df.DF,
             is_call=self.df.is_call,
             x0=np.full_like(self.df.price, 0.2),
         )
         np.testing.assert_allclose(result, expected, rtol=1e-10, atol=1e-10)
 
-    def test_implied_vol_jaeckel(self) -> None:
+    def test_implied_vol_scalar(self) -> None:
         for row in self.df.itertuples(index=False):
-            iv = implied_vol_jackel(
+            iv = implied_vol(
                 price=row.price,
-                f=row.F,
-                k=row.K,
-                t=row.tau,
-                df=row.DF,
+                fwd=row.F,
+                strike=row.K,
+                tau=row.tau,
+                disc=row.DF,
                 is_call=row.is_call,
             )
+            self.assertIsInstance(iv, np.ndarray)
+            self.assertEqual(iv.shape, ())
             np.testing.assert_allclose(
                 iv,
                 row.sigma,
@@ -125,6 +149,18 @@ class TestBlack76(unittest.TestCase):
                 err_msg=f"row id={row.id}",
             )
 
+    def test_implied_vol_vector(self) -> None:
+        expected = self.df.sigma
+        result = implied_vol(
+            price=self.df.price,
+            fwd=self.df.F,
+            strike=self.df.K,
+            tau=self.df.tau,
+            disc=self.df.DF,
+            is_call=self.df.is_call,
+        )
+        np.testing.assert_allclose(result, expected, rtol=1e-10, atol=1e-10)
+
     def test_delta_to_strike(self) -> None:
         spot_to_fwd_adj = np.exp((self.df.q - self.df.r) * self.df.tau)
         disc = np.exp(-self.df.r * self.df.tau)
@@ -132,9 +168,8 @@ class TestBlack76(unittest.TestCase):
         expected = self.df.K
         result = black76_undisc_fwd_delta_to_strike(
             delta=undisc_fwd_delta,
-            f=self.df.F,
-            t=self.df.tau,
-            r=self.df.r,
+            fwd=self.df.F,
+            tau=self.df.tau,
             sigma=self.df.sigma,
             is_call=self.df.is_call,
         )

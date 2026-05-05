@@ -3,119 +3,137 @@ import warnings
 import letsberational
 import numpy as np
 from numpy.typing import ArrayLike
+from scipy import special
 from scipy.optimize import bisect, newton
-from scipy.stats import norm
 
 
-def _gaussian_density(x: float) -> float:
+def _gaussian_density(x: ArrayLike) -> ArrayLike:
     """Standard normal probability density function."""
     return np.exp(-x * x / 2.0) / np.sqrt(2 * np.pi)
 
 
 def black76_price(
-    df: ArrayLike,
-    f: ArrayLike,
-    k: ArrayLike,
-    t: ArrayLike,
+    fwd: ArrayLike,
+    strike: ArrayLike,
+    tau: ArrayLike,
     sigma: ArrayLike,
+    disc: ArrayLike,
     is_call: ArrayLike,
 ) -> ArrayLike:
     """Black 76 pricing function.
 
     Args:
-        df: Discount factor
-        f: Forward
-        k: Strike
-        t: Time to maturity (year fraction)
+        fwd: Forward
+        strike: Strike
+        tau: Time to maturity (year fraction)
         sigma: Volatility
+        disc: Discount factor
         is_call: call/put flag
 
     Returns: Contract price
     """
-    df, f, k, t, sigma, is_call = map(np.atleast_1d, (df, f, k, t, sigma, is_call))
-    sign = np.array([1.0 if x else -1.0 for x in is_call])
+    fwd, strike, tau, sigma, disc, is_call = map(np.atleast_1d, (fwd, strike, tau, sigma, disc, is_call))
+    is_call = np.asarray(is_call, dtype=bool)
+    sign = 2.0 * is_call.astype(float) - 1.0
 
-    d1 = (np.log(f / k) + (sigma**2 / 2) * t) / (sigma * np.sqrt(t))
-    d2 = d1 - (sigma * np.sqrt(t))
+    total_vol = sigma * np.sqrt(tau)
+    d1 = (np.log(fwd / strike) + 0.5 * sigma**2 * tau) / total_vol
+    d2 = d1 - total_vol
 
-    return df * sign * (f * norm.cdf(sign * d1) - k * norm.cdf(sign * d2))
+    return disc * sign * (fwd * special.ndtr(sign * d1) - strike * special.ndtr(sign * d2))
 
 
 def black76_vega(
-    df: ArrayLike,
-    f: ArrayLike,
-    k: ArrayLike,
-    t: ArrayLike,
+    fwd: ArrayLike,
+    strike: ArrayLike,
+    tau: ArrayLike,
     sigma: ArrayLike,
+    disc: ArrayLike,
 ) -> ArrayLike:
     """Calculate the Black-76 vega for european options."""
-    df, f, k, t, sigma = map(np.atleast_1d, (df, f, k, t, sigma))
+    fwd, strike, tau, sigma, disc = map(np.atleast_1d, (fwd, strike, tau, sigma, disc))
 
-    d1 = (np.log(f / k) + (sigma**2 / 2) * t) / (sigma * np.sqrt(t))
-    return df * f * _gaussian_density(d1) * np.sqrt(t)
+    d1 = (np.log(fwd / strike) + 0.5 * sigma**2 * tau) / (sigma * np.sqrt(tau))
+    return disc * fwd * _gaussian_density(d1) * np.sqrt(tau)
 
 
 def black76_fwd_delta(
-    f: ArrayLike,
-    k: ArrayLike,
-    t: ArrayLike,
-    r: ArrayLike,
+    fwd: ArrayLike,
+    strike: ArrayLike,
+    tau: ArrayLike,
     sigma: ArrayLike,
+    disc: ArrayLike,
     is_call: ArrayLike,
 ) -> ArrayLike:
     """Calculate the Black-76 delta for European options."""
-    f, k, t, r, sigma, is_call = map(np.atleast_1d, (f, k, t, r, sigma, is_call))
-    df = np.exp(-r * t)
-    return df * black76_undisc_fwd_delta(f, k, t, r, sigma, is_call)
+    fwd, strike, tau, sigma, disc, is_call = map(np.atleast_1d, (fwd, strike, tau, sigma, disc, is_call))
+    return disc * black76_undisc_fwd_delta(
+        fwd=fwd,
+        strike=strike,
+        tau=tau,
+        sigma=sigma,
+        is_call=is_call,
+    )
 
 
 def black76_undisc_fwd_delta(
-    f: ArrayLike,
-    k: ArrayLike,
-    t: ArrayLike,
-    r: ArrayLike,
+    fwd: ArrayLike,
+    strike: ArrayLike,
+    tau: ArrayLike,
     sigma: ArrayLike,
     is_call: ArrayLike,
 ) -> ArrayLike:
     """Calculate the Black-76 delta for European options."""
-    f, k, t, r, sigma, is_call = map(np.atleast_1d, (f, k, t, r, sigma, is_call))
-    d1 = (np.log(f / k) + 0.5 * sigma**2 * t) / (sigma * np.sqrt(t))
-    return np.where(is_call, norm.cdf(d1), -norm.cdf(-d1))
+    fwd, strike, tau, sigma, is_call = map(np.atleast_1d, (fwd, strike, tau, sigma, is_call))
+    is_call = np.asarray(is_call, dtype=bool)
+    sign = 2.0 * is_call.astype(float) - 1.0
+    d1 = (np.log(fwd / strike) + 0.5 * sigma**2 * tau) / (sigma * np.sqrt(tau))
+    return sign * special.ndtr(sign * d1)
 
 
 def black76_undisc_fwd_delta_to_strike(
     delta: ArrayLike,
-    f: ArrayLike,
-    t: ArrayLike,
-    r: ArrayLike,
+    fwd: ArrayLike,
+    tau: ArrayLike,
     sigma: ArrayLike,
     is_call: ArrayLike,
 ) -> ArrayLike:
     """Calculate the Black-76 delta for European options."""
-    f, t, r, sigma, is_call = map(np.atleast_1d, (f, t, r, sigma, is_call))
+    delta, fwd, tau, sigma, is_call = map(np.atleast_1d, (delta, fwd, tau, sigma, is_call))
+    is_call = np.asarray(is_call, dtype=bool)
+    sign = 2.0 * is_call.astype(float) - 1.0
+    total_vol = sigma * np.sqrt(tau)
 
-    total_vol = sigma * np.sqrt(t)
-
-    return np.where(
-        is_call,
-        f * np.exp(-total_vol * norm.ppf(delta) + 0.5 * total_vol**2),
-        f * np.exp(total_vol * norm.ppf(-delta) + 0.5 * total_vol**2),
-    )
+    return fwd * np.exp(-sign * total_vol * special.ndtri(sign * delta) + 0.5 * total_vol**2)
 
 
 def implied_vol_simple(
-    df: float,
-    f: float,
-    k: float,
-    t: float,
-    p: float,
-    is_call: bool,
-    x0: float = 0.3,
-) -> float:
+    price: ArrayLike,
+    fwd: ArrayLike,
+    strike: ArrayLike,
+    tau: ArrayLike,
+    disc: ArrayLike,
+    is_call: ArrayLike,
+    x0: ArrayLike = 0.3,
+) -> ArrayLike:
     try:
         return newton(
-            func=lambda x: black76_price(df, f, k, t, x, is_call) - p,
-            fprime=lambda x: black76_vega(df, f, k, t, x),
+            func=lambda x: black76_price(
+                fwd=fwd,
+                strike=strike,
+                tau=tau,
+                sigma=x,
+                disc=disc,
+                is_call=is_call,
+            )
+            - price,
+            fprime=lambda x: black76_vega(
+                fwd=fwd,
+                strike=strike,
+                tau=tau,
+                sigma=x,
+                disc=disc,
+            ),
             x0=x0,
             tol=1e-12,
             rtol=1e-10,
@@ -129,7 +147,15 @@ def implied_vol_simple(
         )
         try:
             return bisect(
-                f=lambda x: black76_price(df, f, k, t, x, is_call) - p,
+                f=lambda x: black76_price(
+                    fwd=fwd,
+                    strike=strike,
+                    tau=tau,
+                    sigma=x,
+                    disc=disc,
+                    is_call=is_call,
+                )
+                - price,
                 a=0.00001,
                 b=3,
                 xtol=1e-12,
@@ -141,59 +167,60 @@ def implied_vol_simple(
             return None
 
 
-def implied_vol_jackel(
+def _implied_vol_jaeckel_scalar(
     price: float,
-    f: float,
-    k: float,
-    t: float,
-    df: float,
+    fwd: float,
+    strike: float,
+    tau: float,
+    disc: float,
     is_call: bool,
 ) -> float:
     """Implied volatility using Jaeckel's method (letsberational)."""
     theta = 1.0 if is_call else -1.0
-    return letsberational.implied_black_vol(p=price / df, f=f, k=k, t=t, option_type=theta)
+    return letsberational.implied_black_vol(p=price / disc, f=fwd, k=strike, t=tau, option_type=theta)
 
 
 def bsm_price(
-    s: ArrayLike,
-    k: ArrayLike,
-    t: ArrayLike,
+    spot: ArrayLike,
+    strike: ArrayLike,
+    tau: ArrayLike,
     sigma: ArrayLike,
     r: ArrayLike,
     q: ArrayLike,
     is_call: ArrayLike,
 ) -> ArrayLike:
     """Black-Scholes-Merton price using Black-76 formula."""
-    fwd = s * np.exp((r - q) * t)
-    disc = np.exp(-r * t)
+    fwd = spot * np.exp((r - q) * tau)
+    disc = np.exp(-r * tau)
     return black76_price(
-        df=disc,
-        f=fwd,
-        k=k,
-        t=t,
+        fwd=fwd,
+        strike=strike,
+        tau=tau,
         sigma=sigma,
+        disc=disc,
         is_call=is_call,
     )
 
 
 def bsm_spot_delta(
-    s: ArrayLike,
-    k: ArrayLike,
-    t: ArrayLike,
+    spot: ArrayLike,
+    strike: ArrayLike,
+    tau: ArrayLike,
     sigma: ArrayLike,
     r: ArrayLike,
     q: ArrayLike,
     is_call: ArrayLike,
 ) -> ArrayLike:
     """Black-Scholes-Merton price using Black-76 formula."""
-    adj = np.exp((r - q) * t)
-    fwd = s * np.exp((r - q) * t)
+    adj = np.exp((r - q) * tau)
+    fwd = spot * np.exp((r - q) * tau)
+    disc = np.exp(-r * tau)
     return adj * black76_fwd_delta(
-        f=fwd,
-        k=k,
-        t=t,
-        r=r,
+        fwd=fwd,
+        strike=strike,
+        tau=tau,
         sigma=sigma,
+        disc=disc,
         is_call=is_call,
     )
 
@@ -203,12 +230,12 @@ def _broadcast_and_flatten(*args, shape: tuple) -> list[np.ndarray]:
 
 
 def implied_vol(
-    price: ArrayLike,
-    strike: ArrayLike,
-    tau: ArrayLike,
-    fwd: ArrayLike,
-    disc: ArrayLike,
-    is_call: ArrayLike,
+    price: float | ArrayLike,
+    fwd: float | ArrayLike,
+    strike: float | ArrayLike,
+    tau: float | ArrayLike,
+    disc: float | ArrayLike,
+    is_call: bool | ArrayLike,
 ) -> np.ndarray:
     """Calculate implied volatilities using Jaeckel's method."""
     price = np.asarray(price, dtype=float)
@@ -225,12 +252,12 @@ def implied_vol(
     n = flat_price.size
     iv = np.empty(n, dtype=float)
     for i in range(n):
-        iv[i] = implied_vol_jackel(
+        iv[i] = _implied_vol_jaeckel_scalar(
             price=flat_price[i],
-            f=flat_fwd[i],
-            k=flat_strike[i],
-            t=flat_tau[i],
-            df=flat_disc[i],
+            fwd=flat_fwd[i],
+            strike=flat_strike[i],
+            tau=flat_tau[i],
+            disc=flat_disc[i],
             is_call=flat_is_call[i],
         )
 
