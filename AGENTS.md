@@ -9,7 +9,7 @@ Use this file as the high-level overview and, for more details, refer to:
 
 - [docs/architecture.md](docs/architecture.md) for architecture notes.
 - [docs/style.md](docs/style.md) for style notes.
-- [docs/testing.py](docs/testing.py) for testing notes.
+- [docs/testing.py](docs/testing.md) for testing notes.
 
 
 ## Prefered Tech Stack
@@ -59,9 +59,10 @@ See [docs/style.md](docs/style.md) for code standards and naming details.
 See [docs/testing.py](docs/testing.py) for detailed testing guidance.
 
 ## Numerical Standards
-- Preserve vectorized semantics for both scalar and batched inputs.
+- Public API: accept `ArrayLike`, validate, broadcast, and returns a normalised scalar/array output.
+- Numerical kernel: accepts already-validated arrays and returns arrays (including 0-d arrays).
 - Avoid undocumented implicit broadcasting or silent reshaping.
-- Prefer numpy ndrarray to dataframens when  
+- Prefer numpy ndrarray to dataframens when possible. 
 
 ## Error Handling and Logging
 - Fail fast on invalid market data, unsupported conventions, or impossible parameter regimes.

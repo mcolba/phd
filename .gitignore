@@ -39,3 +39,6 @@ data/
 _temp/
 _deprecated/
 third_party/heston/backup/
+
+# Local config files
+scripts/config.yaml
