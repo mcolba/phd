@@ -217,9 +217,8 @@ def mixed_log_norm_price(
     )
 
 
-def make_full_encoder(tau: float, method: str = "simplex") -> tuple:
+def make_full_encoder(*__, method: str = "simplex") -> tuple:
     """Creates a bijection for log-normal mixture calibration parameters."""
-    tau = float(tau)
 
     def encode(params: LogNormMixParams) -> tuple:
         w, fwd_scale, sigma = params.w, params.fwd_scale, params.sigma
@@ -424,7 +423,7 @@ def make_full_encoder_totvar(tau: float, method: str = "simplex") -> tuple:
     return (encode, decode, jac_decode)
 
 
-def make_reduced_encoder(tau: float) -> tuple:
+def make_reduced_encoder(*__) -> tuple:
     """Creates a bijection with w and fwd_scale fixed; only sigma is free."""
 
     def encode(params: LogNormMixParams) -> tuple:
