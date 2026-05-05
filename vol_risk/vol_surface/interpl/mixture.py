@@ -10,10 +10,20 @@ from scipy.optimize import least_squares
 
 from vol_risk.calibration.option_chain import NoArbBounds
 from vol_risk.calibration.transformers import get_atmf_vol
-from vol_risk.models.black76 import black76_price, black76_vega, implied_vol, implied_vol_jackel
+from vol_risk.models.black76 import (
+    black76_price,
+    black76_undisc_fwd_delta,
+    black76_vega,
+    implied_black_vol,
+)
 from vol_risk.models.linear import LinearEquityMarket
-from vol_risk.protocols import EuropeanOption, ModelParams, OptionChainLike
-from vol_risk.util import angles_to_simplex, make_ravel_param, simplex_to_angles
+from vol_risk.protocols import ModelParams, OptionChainLike
+from vol_risk.util import (
+    angles_to_simplex,
+    angles_to_simplex_jac,
+    make_ravel_param_jac,
+    simplex_to_angles,
+)
 from vol_risk.vol_surface.surface import VolSmile, VolSurface
 
 log = logging.getLogger(__name__)
@@ -29,19 +39,19 @@ class LogNormMixParams(ModelParams):
     """Parameters for the log-normal mixture model.
 
     Attributes:
-        w: The weights of the mixture components.
-        mu: The means of the mixture components.
-        sigma: The volatilities of the mixture components.
+        w: Mixture component weights.
+        fwd_scale: Forward-scale factors.
+        sigma: Black-76 volatilities.
     """
 
     w: np.ndarray
-    mu: np.ndarray
+    fwd_scale: np.ndarray
     sigma: np.ndarray
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Validates parameters."""
-        if not (len(self.w) == len(self.mu) == len(self.sigma)):
-            msg = "Parameters 'w', 'mu', and 'sigma' must have the same length."
+        if not (len(self.w) == len(self.fwd_scale) == len(self.sigma)):
+            msg = "Parameters 'w', 'fwd_scale', and 'sigma' must have the same length."
             raise ValueError(msg)
 
         if not np.all(self.w >= 0):
@@ -51,6 +61,18 @@ class LogNormMixParams(ModelParams):
         if not np.isclose(np.sum(self.w), 1.0):
             msg = "The sum of weights 'w' must be equal to 1."
             raise ValueError(msg)
+
+        if not np.all(self.fwd_scale > 0):
+            msg = "All forward-scale factors must be positive."
+            raise ValueError(msg)
+
+        if not np.isclose(np.dot(self.w, self.fwd_scale), 1.0):
+            msg = "Martingale constraint violated: sum(w * fwd_scale) must equal 1."
+            raise ValueError(msg)
+
+    def mu(self, tau: float) -> np.ndarray:
+        """Recover drift parameters for a given time-to-expiry."""
+        return np.log(self.fwd_scale) / tau
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,83 +88,132 @@ class LogNormMixCalibParams:
     x0: LogNormMixParams | None
 
 
-def _mixed_log_norm_call(
+def _param_slices(n: int) -> tuple[slice, slice, slice]:
+    """Return slices into stacked parameter vector [w | fwd_scale | sigma]."""
+    return slice(0, n), slice(n, 2 * n), slice(2 * n, 3 * n)
+
+
+def _mixed_log_norm_opt_price(
     w: ArrayLike,
-    mu: ArrayLike,
+    fwd_scale: ArrayLike,
     sigma: ArrayLike,
-    DF: ArrayLike,
-    F: ArrayLike,
-    K: ArrayLike,
+    disc: ArrayLike,
+    fwd: ArrayLike,
+    strike: ArrayLike,
     tau: ArrayLike,
-    pdef: float = 0,
+    is_call: ArrayLike = True,
+    pdef: float = 0.0,
 ) -> np.ndarray:
-    """Low-level function returning call option price under a log-normal mixture model."""
-    w = np.asarray(w)
-    mu = np.asarray(mu)
-    sigma = np.asarray(sigma)
+    """Vectorized log-normal mixture option price."""
+    w = np.asarray(w, dtype=float)
+    fwd_scale = np.asarray(fwd_scale, dtype=float)
+    sigma = np.asarray(sigma, dtype=float)
 
-    if not (w.shape == mu.shape == sigma.shape):
-        msg = "w, mu, sigma must have identical 1-D shapes"
-        raise ValueError(msg)
-    if not np.isclose(w.sum(), 1.0):
-        msg = "mixture weights must sum to 1"
-        raise ValueError(msg)
+    strike, tau, disc, fwd, is_call = np.broadcast_arrays(
+        np.asarray(strike, dtype=float),
+        np.asarray(tau, dtype=float),
+        np.asarray(disc, dtype=float),
+        np.asarray(fwd, dtype=float),
+        np.asarray(is_call, dtype=bool),
+    )
 
-    # TODO(Marco): vectorise
     return (1 - pdef) * np.sum(
-        w[i] * black76_price(df=DF, f=F * np.exp(mu[i] * tau) / (1 - pdef), k=K, t=tau, sigma=sigma[i], is_call=True)
+        w[i]
+        * black76_price(
+            disc=disc,
+            fwd=fwd * fwd_scale[i] / (1 - pdef),
+            strike=strike,
+            tau=tau,
+            sigma=sigma[i],
+            is_call=is_call,
+        )
         for i in range(len(w))
     )
 
 
-def mixed_log_norm(
+def _mixed_log_norm_opt_jac(
     w: ArrayLike,
-    mu: ArrayLike,
+    fwd_scale: ArrayLike,
     sigma: ArrayLike,
-    DF: ArrayLike,
-    F: ArrayLike,
-    K: ArrayLike,
+    disc: ArrayLike,
+    fwd: ArrayLike,
+    strike: ArrayLike,
     tau: ArrayLike,
     is_call: ArrayLike,
-    pdef: float = 0,
+    pdef: float = 0.0,
 ) -> np.ndarray:
-    """Low-level function returning put option price under a log-normal mixture model."""
-    w = np.asarray(w)
-    mu = np.asarray(mu)
-    sigma = np.asarray(sigma)
+    """Analytical Jacobian of mixture option price w.r.t. stacked [w | fwd_scale | sigma]."""
+    w, fwd_scale, sigma = [np.asarray(x, dtype=float).reshape(-1, 1) for x in (w, fwd_scale, sigma)]
 
-    if not (w.shape == mu.shape == sigma.shape):
-        msg = "w, mu, and sigma must have identical 1-D shapes"
-        raise ValueError(msg)
-    if not np.isclose(w.sum(), 1.0):
-        msg = "mixture weights must sum to 1"
+    if not w.shape == fwd_scale.shape == sigma.shape:
+        msg = "Parameters 'w', 'fwd_scale', and 'sigma' must have the same shape."
         raise ValueError(msg)
 
-    # TODO(Marco): vectorise
-    return (1 - pdef) * np.sum(
-        w[i] * black76_price(df=DF, f=F * np.exp(mu[i] * tau) / (1 - pdef), k=K, t=tau, sigma=sigma[i], is_call=is_call)
-        for i in range(len(w))
-    )
+    if pdef < 0 or pdef >= 1 - 1e-8:
+        msg = "Invalid pdef: must be in [0, 1)."
+        raise ValueError(msg)
+
+    strike, tau, disc, fwd, is_call = [
+        np.atleast_1d(x).reshape(1, -1)
+        for x in np.broadcast_arrays(
+            np.asarray(strike, dtype=float),
+            np.asarray(tau, dtype=float),
+            np.asarray(disc, dtype=float),
+            np.asarray(fwd, dtype=float),
+            np.asarray(is_call, dtype=bool),
+        )
+    ]
+
+    F_comp = fwd * fwd_scale / (1.0 - pdef)
+
+    n, m = w.size, strike.size
+    s_w, s_fs, s_sig = _param_slices(n)
+
+    price = black76_price(fwd=F_comp, strike=strike, tau=tau, sigma=sigma, disc=disc, is_call=is_call)
+    delta = black76_undisc_fwd_delta(fwd=F_comp, strike=strike, tau=tau, sigma=sigma, is_call=is_call)
+    vega = black76_vega(fwd=F_comp, strike=strike, tau=tau, sigma=sigma, disc=disc)
+
+    non_zero_mass = 1.0 - pdef
+    jac = np.zeros((m, 3 * n), dtype=float)
+
+    jac[:, s_w] = (non_zero_mass * price).T
+    jac[:, s_fs] = (w * disc * delta * fwd).T
+    jac[:, s_sig] = (non_zero_mass * w * vega).T
+
+    return jac
 
 
-def mixed_log_norm_call(
-    x: LogNormMixParams,
-    mkt: LinearEquityMarket,
-    opt: EuropeanOption,
-) -> np.array:
-    """Returns the call option price under a log-normal mixture model."""
-    k, tau = opt.strike, opt.tau
-    fwd = mkt.fwd(tau)
-    disc = mkt.df(tau)
+def mixed_log_norm_price(
+    params: LogNormMixParams,
+    disc: ArrayLike,
+    fwd: ArrayLike,
+    tau: ArrayLike,
+    strike: ArrayLike,
+    is_call: ArrayLike,
+) -> np.ndarray:
+    """Public API: option prices under a log-normal mixture model.
 
-    return _mixed_log_norm_call(
-        w=x.w,
-        mu=x.mu,
-        sigma=x.sigma,
-        DF=disc,
-        F=fwd,
-        K=k,
+    Args:
+        params: Calibrated mixture parameters.
+        disc: Discount factor.
+        fwd: Forward price.
+        strike: Array of strikes.
+        tau: Time to expiry.
+        is_call: Call/put flag(s).
+
+    Returns:
+        Array of option prices.
+    """
+    return _mixed_log_norm_opt_price(
+        w=params.w,
+        fwd_scale=params.fwd_scale,
+        sigma=params.sigma,
+        disc=disc,
+        fwd=fwd,
+        strike=strike,
         tau=tau,
+        is_call=is_call,
+        pdef=0.0,
     )
 
 
@@ -151,8 +222,8 @@ def make_full_encoder(tau: float, method: str = "simplex") -> tuple:
     tau = float(tau)
 
     def encode(params: LogNormMixParams) -> tuple:
-        w, mu, sigma = params.w, params.mu, params.sigma
-        z = w * np.exp(mu * tau)
+        w, fwd_scale, sigma = params.w, params.fwd_scale, params.sigma
+        z = w * fwd_scale
 
         if not (np.isclose(np.sum(w), 1.0) and np.all(w >= 0)):
             msg = "Not a bijection. Limit the domain to unit sphere coordinates."
@@ -167,7 +238,7 @@ def make_full_encoder(tau: float, method: str = "simplex") -> tuple:
         if method == "simplex":
             x1 = simplex_to_angles(z)
         elif method == "manual":
-            x1 = mu[: len(z) - 1]
+            x1 = fwd_scale[:-1]
         else:
             msg = f"Unsupported bijection method: {method!r}. Use 'simplex' or 'manual'."
             raise ValueError(msg)
@@ -182,30 +253,76 @@ def make_full_encoder(tau: float, method: str = "simplex") -> tuple:
 
         if method == "simplex":
             z = angles_to_simplex(x1)
-            mu = np.log(z / w) / tau
+            fwd_scale = z / w
         elif method == "manual":
-            partial_sum = np.dot(w[:-1], np.exp(x1 * tau))
+            fwd_scale_free = x1
+            partial_sum = np.dot(w[:-1], fwd_scale_free)
             if (1 - partial_sum) <= 0:
                 msg = "Invalid parameters: remaining forward mass <= 0. Use simplex method instead."
                 raise ValueError(msg)
-            mu_n = np.log((1 - partial_sum) / w[-1]) / tau
-            mu = np.append(x1, mu_n)
+            fwd_scale_n = (1.0 - partial_sum) / w[-1]
+            fwd_scale = np.append(fwd_scale_free, fwd_scale_n)
         else:
             msg = f"Unsupported bijection method: {method!r}. Use 'simplex' or 'manual'."
             raise ValueError(msg)
 
-        return LogNormMixParams(w=w, mu=mu, sigma=sigma)
+        return LogNormMixParams(w=w, fwd_scale=fwd_scale, sigma=sigma)
 
-    return (encode, decode)
+    def jac_decode(free: list[np.ndarray], _: tuple) -> np.ndarray:
+        """Jacobian d[w, fwd_scale, sigma] / d[flat_x] with shape (3n, n_flat)."""
+        x0, x1, sigma = free
+        n = len(x0) + 1
+        s_w, s_fs, s_sig = _param_slices(n)
+        n_flat = len(x0) + len(x1) + len(sigma)
+        jac = np.zeros((3 * n, n_flat), dtype=float)
+
+        sl_x0 = slice(0, len(x0))
+        sl_x1 = slice(len(x0), len(x0) + len(x1))
+        sl_sig = slice(len(x0) + len(x1), n_flat)
+
+        dw_dx0 = angles_to_simplex_jac(x0)
+        jac[s_w, sl_x0] = dw_dx0
+
+        w = angles_to_simplex(x0)
+
+        if method == "simplex":
+            z = angles_to_simplex(x1)
+            dz_dx1 = angles_to_simplex_jac(x1)
+            fwd_scale = z / w
+
+            jac[s_fs, sl_x0] = -(fwd_scale / w)[:, np.newaxis] * dw_dx0
+            jac[s_fs, sl_x1] = (1.0 / w)[:, np.newaxis] * dz_dx1
+
+        elif method == "manual":
+            fwd_scale_free = x1
+            partial_sum = np.dot(w[:-1], fwd_scale_free)
+            fwd_scale_n = (1.0 - partial_sum) / w[-1]
+            fwd_scale = np.append(fwd_scale_free, fwd_scale_n)
+
+            # Quotient rule on (1 - w[:-1] @ x1) / w[-1]
+            dfn_dx0 = (-(dw_dx0[:-1, :].T @ fwd_scale_free) - fwd_scale_n * dw_dx0[-1, :]) / w[-1]
+            jac[s_fs.start + n - 1, sl_x0] = dfn_dx0
+
+            for i in range(n - 1):
+                jac[s_fs.start + i, sl_x1.start + i] = 1.0
+
+            for j in range(n - 1):
+                jac[s_fs.start + n - 1, sl_x1.start + j] = -w[j] / w[-1]
+
+        jac[s_sig, sl_sig] = np.eye(n)
+
+        return jac
+
+    return (encode, decode, jac_decode)
 
 
 def make_full_encoder_totvar(tau: float, method: str = "simplex") -> tuple:
-    """Creates a bijection for log-normal mixture calibration parameters with additive total variance."""
+    """Creates a bijection with additive total variance parametrisation for sigma."""
     tau = float(tau)
 
     def encode(params: LogNormMixParams) -> tuple:
-        w, mu, sigma = params.w, params.mu, params.sigma
-        z = w * np.exp(mu * tau)
+        w, fwd_scale, sigma = params.w, params.fwd_scale, params.sigma
+        z = w * fwd_scale
 
         if not (np.isclose(np.sum(w), 1.0) and np.all(w >= 0)):
             msg = "Not a bijection. Limit the domain to unit sphere coordinates."
@@ -215,13 +332,13 @@ def make_full_encoder_totvar(tau: float, method: str = "simplex") -> tuple:
             msg = "Not a bijection. Limit the domain to unit sphere coordinates."
             raise ValueError(msg)
 
-        dv = np.zeros_like(sigma, np.float64)
+        dv = np.zeros_like(sigma, dtype=np.float64)
         x0 = simplex_to_angles(w)
 
         if method == "simplex":
             x1 = simplex_to_angles(z)
         elif method == "manual":
-            x1 = mu[: len(z) - 1]
+            x1 = fwd_scale[:-1]
         else:
             msg = f"Unsupported bijection method: {method!r}. Use 'simplex' or 'manual'."
             raise ValueError(msg)
@@ -239,32 +356,80 @@ def make_full_encoder_totvar(tau: float, method: str = "simplex") -> tuple:
         sigma = np.sqrt((v0 + dv) / tau)
 
         w = angles_to_simplex(x0)
-        z = angles_to_simplex(x1)
 
         if method == "simplex":
-            mu = np.log(z / w) / tau
+            z = angles_to_simplex(x1)
+            fwd_scale = z / w
         elif method == "manual":
-            partial_sum = np.dot(w[:-1], np.exp(x1 * tau))
+            fwd_scale_free = x1
+            partial_sum = np.dot(w[:-1], fwd_scale_free)
             if (1 - partial_sum) <= 0:
                 msg = "Invalid parameters: remaining forward mass <= 0. Use simplex method instead."
                 raise ValueError(msg)
-            mu_n = np.log((1 - partial_sum) / w[-1]) / tau
-            mu = np.append(x1, mu_n)
+            fwd_scale_n = (1.0 - partial_sum) / w[-1]
+            fwd_scale = np.append(fwd_scale_free, fwd_scale_n)
         else:
             msg = f"Unsupported bijection method: {method!r}. Use 'simplex' or 'manual'."
             raise ValueError(msg)
 
-        return LogNormMixParams(w=w, mu=mu, sigma=sigma)
+        return LogNormMixParams(w=w, fwd_scale=fwd_scale, sigma=sigma)
 
-    return (encode, decode)
+    def jac_decode(free: list[np.ndarray], fixed: tuple) -> np.ndarray:
+        """Jacobian d[w, fwd_scale, sigma] / d[flat_x] with shape (3n, n_flat)."""
+        x0, x1, dv = free
+        v0 = fixed[0]
+        n = len(x0) + 1
+        s_w, s_fs, s_sig = _param_slices(n)
+        n_flat = len(x0) + len(x1) + len(dv)
+        jac = np.zeros((3 * n, n_flat), dtype=float)
+
+        sl_x0 = slice(0, len(x0))
+        sl_x1 = slice(len(x0), len(x0) + len(x1))
+        sl_dv = slice(len(x0) + len(x1), n_flat)
+
+        dw_dx0 = angles_to_simplex_jac(x0)
+        jac[s_w, sl_x0] = dw_dx0
+
+        w = angles_to_simplex(x0)
+
+        if method == "simplex":
+            z = angles_to_simplex(x1)
+            dz_dx1 = angles_to_simplex_jac(x1)
+            fwd_scale = z / w
+
+            jac[s_fs, sl_x0] = -(fwd_scale / w)[:, np.newaxis] * dw_dx0
+            jac[s_fs, sl_x1] = (1.0 / w)[:, np.newaxis] * dz_dx1
+
+        elif method == "manual":
+            fwd_scale_free = x1
+            partial_sum = np.dot(w[:-1], fwd_scale_free)
+            fwd_scale_n = (1.0 - partial_sum) / w[-1]
+            fwd_scale = np.append(fwd_scale_free, fwd_scale_n)
+
+            # Quotient rule on (1 - w[:-1] @ x1) / w[-1]
+            dfn_dx0 = (-(dw_dx0[:-1, :].T @ fwd_scale_free) - fwd_scale_n * dw_dx0[-1, :]) / w[-1]
+            jac[s_fs.start + n - 1, sl_x0] = dfn_dx0
+
+            for i in range(n - 1):
+                jac[s_fs.start + i, sl_x1.start + i] = 1.0
+
+            for j in range(n - 1):
+                jac[s_fs.start + n - 1, sl_x1.start + j] = -w[j] / w[-1]
+
+        sigma = np.sqrt((v0 + dv) / tau)
+        jac[s_sig, sl_dv] = np.diag(1.0 / (2.0 * tau * sigma))
+
+        return jac
+
+    return (encode, decode, jac_decode)
 
 
 def make_reduced_encoder(tau: float) -> tuple:
-    """Creates a bijection for log-normal mixture calibration with mu and w parameters fixed."""
+    """Creates a bijection with w and fwd_scale fixed; only sigma is free."""
 
     def encode(params: LogNormMixParams) -> tuple:
-        w, mu, sigma = params.w, params.mu, params.sigma
-        z = w * np.exp(mu * tau)
+        w, fwd_scale, sigma = params.w, params.fwd_scale, params.sigma
+        z = w * fwd_scale
 
         if not (np.isclose(np.sum(w), 1.0) and np.all(w >= 0)):
             msg = "Not a bijection. Limit the domain to unit sphere coordinates."
@@ -274,20 +439,29 @@ def make_reduced_encoder(tau: float) -> tuple:
             msg = "Not a bijection. Limit the domain to unit sphere coordinates."
             raise ValueError(msg)
 
-        free = sigma
-        fixed = (w, mu)
+        free = (sigma,)
+        fixed = (w, fwd_scale)
         return (free, fixed)
 
     def decode(free: tuple[ArrayLike], fixed: tuple[ArrayLike]) -> LogNormMixParams:
-        w, mu = fixed
-        sigma = np.squeeze(free)
-        return LogNormMixParams(w=w, mu=mu, sigma=sigma)
+        (sigma,) = free
+        w, fwd_scale = fixed
+        sigma = np.squeeze(sigma)
+        return LogNormMixParams(w=w, fwd_scale=fwd_scale, sigma=sigma)
 
-    return (encode, decode)
+    def jac_decode(free: list[np.ndarray], fixed: tuple) -> np.ndarray:
+        """Jacobian d[w, fwd_scale, sigma] / d[sigma_flat], shape (3n, n)."""
+        (sigma,) = free
+        n = len(sigma)
+        _, _, s_sig = _param_slices(n)
+        jac = np.zeros((3 * n, n), dtype=float)
+        jac[s_sig, :] = np.eye(n)
+        return jac
+
+    return (encode, decode, jac_decode)
 
 
 def _require_call_only(chain: OptionChainLike) -> None:
-    # TODO: move out.
     if not np.all(chain.option_type == "C"):
         msg = "Function expects a call-only chain. Use make_otm_to_call first."
         raise ValueError(msg)
@@ -343,49 +517,11 @@ BOUNDS_METHODS = {
 }
 
 
-def _force_mu_to_unit_sum(params: LogNormMixParams, tau: float) -> LogNormMixParams:
-    """Adjusts the mu parameters so that the mixture has unit expectation."""
-    s = np.sum(params.w * np.exp(params.mu * tau))
-    mu_new = params.mu - np.log(s) / tau
-    return LogNormMixParams(w=params.w, mu=mu_new, sigma=params.sigma)
-
-
-# def _mixed_log_norm_calib(n, k, t, f, df, mkt_prices, loss_scale=1):
-#     """Calibrate a log-normal mixture model to option prices."""
-#     # Initial guess
-#     w0 = np.repeat(1 / n, n)
-#     mu0 = np.zeros(n)
-#     mu0[0] = -0.1
-#     mu0[-1] = np.log((1 - sum(w0[:-1] * np.exp(mu0[:-1] * t))) / w0[-1]) / t
-#     sigma0 = np.repeat(0.2, n)
-#     p0 = LogNormMixParams(w0, mu0, sigma0)
-#     x0, unravel = make_ravel_param(p0, make_reduced_encoder(tau=t), check_unravel=True)
-
-#     # bounds
-#     bounds = (np.repeat(0.03, n), np.repeat(np.inf, n))
-
-#     def _loss_function(x, tau, disc, fwd, k, mkt_opt_p) -> np.ndarray:
-#         param = unravel(x)
-#         model_price = _mixed_log_norm_call(
-#             w=param.w,
-#             mu=param.mu,
-#             sigma=param.sigma,
-#             DF=disc,
-#             F=fwd,
-#             K=k,
-#             tau=tau,
-#         )
-#         return model_price - mkt_opt_p
-
-#     res = least_squares(
-#         fun=lambda x: loss_scale * (_loss_function(x, t, df, f, k, mkt_prices)),
-#         x0=x0,
-#         jac="2-point",
-#         method="trf",
-#         bounds=bounds,
-#     )
-
-#     return unravel(res.x)
+def _normalize_fwd_scale(params: LogNormMixParams) -> LogNormMixParams:
+    """Normalize fwd_scale so that sum(w * fwd_scale) == 1 (martingale constraint)."""
+    ws_tot = np.dot(params.w, params.fwd_scale)
+    fwd_scale_new = params.fwd_scale / ws_tot
+    return LogNormMixParams(w=params.w, fwd_scale=fwd_scale_new, sigma=params.sigma)
 
 
 def softplus(x: np.ndarray, beta: float = 1.0) -> np.ndarray:
@@ -393,12 +529,19 @@ def softplus(x: np.ndarray, beta: float = 1.0) -> np.ndarray:
     return beta * special.softplus(x / beta)
 
 
-def excess_roughness(params: LogNormMixParams, sigma_atm: float = 0.2) -> float:
+def _softplus_deriv(x: np.ndarray, beta: float = 1.0) -> np.ndarray:
+    """Derivative of softplus: sigmoid(x / beta)."""
+    return special.expit(x / beta)
+
+
+def excess_roughness(params: LogNormMixParams, tau: float, sigma_atm: float = 0.2) -> float:
     """Compute the excess roughness of a normal mixture density compared to a Gaussian density."""
+    # TODO @Marco: implement analytivcal.
     z_grid = np.linspace(-2, 2, 500)
     dz = z_grid[1] - z_grid[0]
-    d2f_dx2 = gaussian_mixture_density_second_derivative(z_grid, params.w, params.mu, params.sigma)
-    roughness = sum(d2f_dx2**2 * dz)
+    mu = params.mu(tau)
+    d2f_dx2 = gaussian_mixture_density_second_derivative(z_grid, params.w, mu, params.sigma)
+    roughness = np.sum(d2f_dx2**2 * dz)
     baseline = 3 / (8 * np.sqrt(np.pi) * sigma_atm**5)
     return roughness - baseline
 
@@ -410,7 +553,7 @@ def piecewise_linspace(knots_val: ArrayLike, n: int) -> np.ndarray:
     return np.interp(x, kx, ky)
 
 
-def _smirk_start_guess(n: int, sigma_atm: float, tau: float) -> LogNormMixParams:
+def _smirk_start_guess(n: int, sigma_atm: float) -> LogNormMixParams:
     """Generate initial guess for smirk-like smiles."""
     if n < 2:
         msg = "Number of components must be at least 2."
@@ -422,20 +565,20 @@ def _smirk_start_guess(n: int, sigma_atm: float, tau: float) -> LogNormMixParams
     w_right = (1 - w_left) * w_scale / w_scale.sum()
     w0 = np.concatenate(([w_left], w_right))
 
-    # Assign increasing mu
+    # Assign increasing fwd_scale
     exp_mu_min = 0.8
     exp_mu_left = np.linspace(exp_mu_min, 1, n - 1)
     partial_sum = np.dot(w0[:-1], exp_mu_left)
     exp_mu_right = (1 - partial_sum) / w0[-1]
-    mu0 = np.log(np.concatenate([exp_mu_left, [exp_mu_right]])) / tau
+    fwd_scale0 = np.concatenate([exp_mu_left, [exp_mu_right]])
 
     # Assign decreasing sigma
     sigma0 = np.clip(piecewise_linspace([sigma_atm * 2, sigma_atm, sigma_atm * 0.5], n), SIGMA_MIN, SIGMA_MAX)
 
-    return LogNormMixParams(w0, mu0, sigma0)
+    return LogNormMixParams(w=w0, fwd_scale=fwd_scale0, sigma=sigma0)
 
 
-def _uninformative_start_guess(n: int, sigma_atm: float, tau: float) -> LogNormMixParams:
+def _uninformative_start_guess(n: int, sigma_atm: float) -> LogNormMixParams:
     """Generate initial guess for flat smiles."""
     if n < 2:
         msg = "Number of components must be at least 2."
@@ -444,9 +587,10 @@ def _uninformative_start_guess(n: int, sigma_atm: float, tau: float) -> LogNormM
     w0 = np.repeat(1 / n, n)
     exp_mu_min = 0.8
     exp_mu_max = 2 - exp_mu_min
-    mu0 = np.log(np.linspace(exp_mu_min, exp_mu_max, n)) / tau
+    fwd_scale0 = np.linspace(exp_mu_min, exp_mu_max, n)
+    fwd_scale0 = fwd_scale0 / np.dot(w0, fwd_scale0)
     sigma0 = np.clip(np.repeat(sigma_atm, n), SIGMA_MIN, SIGMA_MAX)
-    return LogNormMixParams(w0, mu0, sigma0)
+    return LogNormMixParams(w=w0, fwd_scale=fwd_scale0, sigma=sigma0)
 
 
 INITIAL_GUESS_METHODS = {
@@ -471,11 +615,33 @@ def calib_mixture_smile(
     lambda_mu: float = 0.0,
     lambda_sigma: float = 0.0,
     lambda_ca_bounds: float = 0.0,
-    pdef: float = 0.0,
     sigma_atm: float = 0.2,
     no_arb_bounds: pd.DataFrame | None = None,
-) -> np.ndarray:
-    """Calibrate a log-normal mixture model to option prices."""
+) -> tuple[LogNormMixParams, dict]:
+    """Calibrate a log-normal mixture model to option prices with analytical Jacobian.
+
+    Args:
+        n: Number of mixture components.
+        k: Strike array.
+        tau: Time to expiry.
+        fwd: Forward price.
+        df: Discount factor.
+        mkt_prices: Market (mid) option prices.
+        loss_weights: Per-observation loss weights.
+        p0: Initial parameter guess.
+        lambda_smoothing: Roughness penalty weight.
+        prev_params: Previous-slice params for regularisation.
+        transform_method: Encoder name (one of BIJECTION_METHODS keys).
+        lambda_w: Weight regularisation strength.
+        lambda_mu: Drift regularisation strength (penalises mu change).
+        lambda_sigma: Vol regularisation strength.
+        lambda_ca_bounds: Calendar-arbitrage softplus penalty weight.
+        sigma_atm: ATMF vol used for roughness baseline.
+        no_arb_bounds: DataFrame with calendar-arb upper/lower bounds.
+
+    Returns:
+        Tuple of (fitted LogNormMixParams, statistics dict).
+    """
     if p0 is None:
         p0 = _uninformative_start_guess(n, sigma_atm=sigma_atm, tau=float(tau))
 
@@ -486,7 +652,7 @@ def calib_mixture_smile(
     min_vol = 0.0 if "totvar" in transform_method else SIGMA_MIN
 
     encoder = BIJECTION_METHODS[transform_method](float(tau))
-    x0, unravel = make_ravel_param(p0, encoder, check_unravel=False)
+    x0, unravel, jac_fn = make_ravel_param_jac(p0, encoder, check_unravel=False)
 
     if transform_method == "reduced":
         bounds_type = "reduced"
@@ -505,73 +671,198 @@ def calib_mixture_smile(
     # Clip initial guess to bounds
     x0 = np.clip(x0, bounds[0], bounds[1])
 
-    def _loss_function(x: ArrayLike) -> np.ndarray:
+    # Pre-compute constants
+    k_arr = np.asarray(k, dtype=float)
+    is_call_price = np.ones(len(k_arr), dtype=bool)
+    weights_base = np.broadcast_to(np.asarray(loss_weights, dtype=float), mkt_prices.shape)
+    n_obs = len(mkt_prices)
+    n_flat = len(x0)
+    s_w, s_fs, s_sig = _param_slices(n)
+
+    # Arb-bounds pre-computation
+    arb_strikes = arb_ub = arb_lb = arb_weights = False
+    if no_arb_bounds is not None:
+        arb_strikes = no_arb_bounds["strike"].to_numpy()
+        arb_ub = no_arb_bounds["price_norm_ub"].to_numpy()
+        arb_weights = no_arb_bounds["weight"].to_numpy()
+        if "price_norm_lb" in no_arb_bounds.columns:
+            arb_lb = no_arb_bounds["price_norm_lb"].to_numpy()
+
+    # Previous mu for regularisation
+    prev_mu = prev_params.mu(tau) if prev_params is not None else None
+
+    def _loss_function(x: np.ndarray) -> np.ndarray:
         param = unravel(x)
-        model_price = _mixed_log_norm_call(
+        model_price = _mixed_log_norm_opt_price(
             w=param.w,
-            mu=param.mu,
+            fwd_scale=param.fwd_scale,
             sigma=param.sigma,
-            DF=df,
-            F=fwd,
-            K=k,
+            disc=df,
+            fwd=fwd,
+            strike=k_arr,
             tau=tau,
-            pdef=pdef,
+            is_call=is_call_price,
         )
 
         residuals = model_price - mkt_prices
-
-        weights = np.broadcast_to(loss_weights, mkt_prices.shape)
+        weights = weights_base.copy()
 
         if lambda_smoothing > 0.0:
-            penalty = np.sqrt(softplus(excess_roughness(param, sigma_atm=sigma_atm), beta=0.1))
+            penalty = np.sqrt(softplus(excess_roughness(param, sigma_atm=sigma_atm, tau=tau), beta=0.1))
             residuals = np.concatenate([residuals, np.array([penalty])])
             weights = np.concatenate([weights, np.array([lambda_smoothing])])
 
         if lambda_w > 0.0 and prev_params is not None:
             delta_w = param.w - prev_params.w
             residuals = np.concatenate([residuals, delta_w])
-            weights = np.concatenate([weights, np.repeat(lambda_w, delta_w.size)])
+            weights = np.concatenate([weights, np.repeat(lambda_w, n)])
 
         if lambda_mu > 0.0 and prev_params is not None:
-            delta_mu = param.mu - prev_params.mu
+            mu_current = param.mu(tau)
+            delta_mu = mu_current - prev_mu
             residuals = np.concatenate([residuals, delta_mu])
-            weights = np.concatenate([weights, np.repeat(lambda_mu, delta_mu.size)])
+            weights = np.concatenate([weights, np.repeat(lambda_mu, n)])
 
         if lambda_sigma > 0.0 and prev_params is not None:
             delta_sigma = param.sigma - prev_params.sigma
             residuals = np.concatenate([residuals, delta_sigma])
-            weights = np.concatenate([weights, np.repeat(lambda_sigma, delta_sigma.size)])
+            weights = np.concatenate([weights, np.repeat(lambda_sigma, n)])
 
-        if no_arb_bounds is not None:
-            prices_norm = _mixed_log_norm_call(
+        if arb_strikes is not None:
+            prices_norm = _mixed_log_norm_opt_price(
                 w=param.w,
-                mu=param.mu,
+                fwd_scale=param.fwd_scale,
                 sigma=param.sigma,
-                DF=df,
-                F=fwd,
-                K=no_arb_bounds["strike"].values,
+                disc=df,
+                fwd=fwd,
+                strike=arb_strikes,
                 tau=tau,
-                pdef=pdef,
+                is_call=np.ones(len(arb_strikes), dtype=bool),
             ) / (fwd * df)
-            prices_ub = no_arb_bounds["price_norm_ub"].to_numpy()
-            arb_loss_weight = no_arb_bounds["weight"].to_numpy()
 
-            arb_upper = softplus(arb_loss_weight * (prices_norm - prices_ub), beta=1e-8)
+            arb_upper = softplus(arb_weights * (prices_norm - arb_ub), beta=1e-8)
             residuals = np.concatenate([residuals, arb_upper])
-            weights = np.concatenate([weights, np.repeat(np.sqrt(lambda_ca_bounds), arb_upper.size)])
+            weights = np.concatenate([weights, np.repeat(np.sqrt(lambda_ca_bounds), len(arb_upper))])
 
-            if "price_norm_lb" in no_arb_bounds.columns:
-                prices_lb = no_arb_bounds["price_norm_lb"].to_numpy()
-                arb_lower = softplus(arb_loss_weight * (prices_lb - prices_norm), beta=1e-8)
+            if arb_lb is not None:
+                arb_lower = softplus(arb_weights * (arb_lb - prices_norm), beta=1e-8)
                 residuals = np.concatenate([residuals, arb_lower])
-                weights = np.concatenate([weights, np.repeat(np.sqrt(lambda_ca_bounds), arb_lower.size)])
+                weights = np.concatenate([weights, np.repeat(np.sqrt(lambda_ca_bounds), len(arb_lower))])
 
         return weights * residuals
 
+    def _jacobian(x: np.ndarray) -> np.ndarray:
+        """Analytical Jacobian of the weighted residual vector."""
+        param = unravel(x)
+        J_enc = jac_fn(x)  # (3n, n_flat)
+
+        # --- Price residual block ---
+        J_price_params = _mixed_log_norm_opt_jac(
+            w=param.w,
+            fwd_scale=param.fwd_scale,
+            sigma=param.sigma,
+            disc=df,
+            fwd=fwd,
+            strike=k_arr,
+            tau=tau,
+            is_call=is_call_price,
+        )  # (n_obs, 3n)
+        J_price = (weights_base[:, np.newaxis] * J_price_params) @ J_enc  # (n_obs, n_flat)
+
+        jac_rows = [J_price]
+
+        # --- Roughness penalty block (numerical Jacobian) ---
+        if lambda_smoothing > 0.0:
+            roughness_val = excess_roughness(param, sigma_atm=sigma_atm, tau=tau)
+            sp_val = softplus(roughness_val, beta=0.1)
+            penalty = np.sqrt(sp_val)
+
+            # Numerical Jacobian via centered differences on x
+            eps = 1e-7
+            jac_rough = np.zeros((1, n_flat), dtype=float)
+            for j in range(n_flat):
+                x_p = x.copy()
+                x_m = x.copy()
+                x_p[j] += eps
+                x_m[j] -= eps
+                p_p = unravel(x_p)
+                p_m = unravel(x_m)
+                r_p = excess_roughness(p_p, sigma_atm=sigma_atm, tau=tau)
+                r_m = excess_roughness(p_m, sigma_atm=sigma_atm, tau=tau)
+                sp_p = np.sqrt(softplus(r_p, beta=0.1))
+                sp_m = np.sqrt(softplus(r_m, beta=0.1))
+                jac_rough[0, j] = (sp_p - sp_m) / (2 * eps)
+            jac_rows.append(lambda_smoothing * jac_rough)
+
+        # --- Weight regularisation block ---
+        if lambda_w > 0.0 and prev_params is not None:
+            # d(w - w_prev)/d_params = [I_n | 0 | 0]
+            J_w_params = np.zeros((n, 3 * n), dtype=float)
+            J_w_params[:, s_w] = np.eye(n)
+            jac_rows.append(lambda_w * (J_w_params @ J_enc))
+
+        # --- Mu regularisation block ---
+        if lambda_mu > 0.0 and prev_params is not None:
+            # mu = log(fwd_scale) / tau => dmu_i/dfwd_scale_i = 1/(tau * fwd_scale_i)
+            J_mu_params = np.zeros((n, 3 * n), dtype=float)
+            J_mu_params[:, s_fs] = np.diag(1.0 / (tau * param.fwd_scale))
+            jac_rows.append(lambda_mu * (J_mu_params @ J_enc))
+
+        # --- Sigma regularisation block ---
+        if lambda_sigma > 0.0 and prev_params is not None:
+            J_sig_params = np.zeros((n, 3 * n), dtype=float)
+            J_sig_params[:, s_sig] = np.eye(n)
+            jac_rows.append(lambda_sigma * (J_sig_params @ J_enc))
+
+        # --- No-arb bounds blocks ---
+        if arb_strikes is not None:
+            n_arb = len(arb_strikes)
+            is_call_arb = np.ones(n_arb, dtype=bool)
+
+            J_arb_params = _mixed_log_norm_opt_jac(
+                w=param.w,
+                fwd_scale=param.fwd_scale,
+                sigma=param.sigma,
+                disc=df,
+                fwd=fwd,
+                strike=arb_strikes,
+                tau=tau,
+                is_call=is_call_arb,
+            ) / (fwd * df)  # (n_arb, 3n)
+
+            prices_norm = _mixed_log_norm_opt_price(
+                w=param.w,
+                fwd_scale=param.fwd_scale,
+                sigma=param.sigma,
+                disc=df,
+                fwd=fwd,
+                strike=arb_strikes,
+                tau=tau,
+                is_call=is_call_arb,
+            ) / (fwd * df)
+
+            # Upper bound: softplus(arb_weight * (price_norm - ub))
+            g_ub = arb_weights * (prices_norm - arb_ub)
+            sig_ub = _softplus_deriv(g_ub, beta=1e-8)  # sigmoid
+            # d(softplus(g))/dx = sigmoid(g/beta) * dg/dx
+            # dg/dx = arb_weight * d(price_norm)/dx
+            J_arb_ub = (np.sqrt(lambda_ca_bounds) * sig_ub * arb_weights)[:, np.newaxis] * J_arb_params
+            jac_rows.append(J_arb_ub @ J_enc)
+
+            if arb_lb is not None:
+                # Lower bound: softplus(arb_weight * (lb - price_norm))
+                g_lb = arb_weights * (arb_lb - prices_norm)
+                sig_lb = _softplus_deriv(g_lb, beta=1e-8)
+                # dg/dx = -arb_weight * d(price_norm)/dx
+                J_arb_lb = (np.sqrt(lambda_ca_bounds) * sig_lb * (-arb_weights))[:, np.newaxis] * J_arb_params
+                jac_rows.append(J_arb_lb @ J_enc)
+
+        return np.vstack(jac_rows)
+
     res = least_squares(
-        fun=lambda x: _loss_function(x),
+        fun=_loss_function,
         x0=x0,
-        jac="3-point",
+        jac=_jacobian,
         method="trf",
         bounds=bounds,
         x_scale="jac",
@@ -582,8 +873,8 @@ def calib_mixture_smile(
         log.warning(msg)
 
     stats = {
-        "error": res.fun[: len(mkt_prices)],
-        "mse": np.mean(res.fun[: len(mkt_prices)] ** 2),
+        "error": res.fun[:n_obs],
+        "mse": float(np.mean(res.fun[:n_obs] ** 2)),
         "success": res.success,
         "message": res.message,
         "cost": res.cost,
@@ -592,10 +883,10 @@ def calib_mixture_smile(
     return unravel(res.x), stats
 
 
-def _make_smile_fun(params: LogNormMixParams, le: LinearEquityMarket, tau: float, pdef: float = 0.0) -> VolSmile:
+def _make_smile_fun(params: LogNormMixParams, le: LinearEquityMarket, tau: float) -> VolSmile:
     """Construct a VolSmile object from calibrated log-normal mixture parameters."""
     tau = float(tau)
-    df = le.df(tau)
+    disc = le.df(tau)
     fwd = le.fwd(tau)
 
     sigma_max = np.max(params.sigma)
@@ -612,31 +903,25 @@ def _make_smile_fun(params: LogNormMixParams, le: LinearEquityMarket, tau: float
 
         # Use OTM contracts for increased stability.
         is_call = k_arr >= fwd
-        prices = mixed_log_norm(
+        prices = _mixed_log_norm_opt_price(
             w=params.w,
-            mu=params.mu,
+            fwd_scale=params.fwd_scale,
             sigma=params.sigma,
-            DF=df,
-            F=fwd,
-            K=k_arr,
+            disc=disc,
+            fwd=fwd,
+            strike=k_arr,
             tau=tau,
-            pdef=pdef,
             is_call=is_call,
         )
 
-        iv = np.empty_like(k_arr, dtype=float)
-        for i, (ki, pi, ci) in enumerate(zip(k_arr, prices, is_call, strict=True)):
-            price = float(pi)
-            is_call = bool(ci)
-
-            iv[i] = implied_vol_jackel(
-                price=price,
-                f=fwd,
-                k=float(ki),
-                t=tau,
-                df=df,
-                is_call=ci,
-            )
+        iv = implied_black_vol(
+            price=prices,
+            fwd=fwd,
+            strike=k_arr,
+            tau=tau,
+            disc=disc,
+            is_call=is_call,
+        )
 
         return float(iv[0]) if k_is_scalar else iv
 
@@ -644,21 +929,23 @@ def _make_smile_fun(params: LogNormMixParams, le: LinearEquityMarket, tau: float
 
 
 def _vega_weights(opt: OptionChainLike, line_mkt: LinearEquityMarket) -> np.ndarray:
+    """Compute inverse-vega weights for loss weighting."""
     fwd = line_mkt.fwd(opt.tau)
     disc = line_mkt.df(opt.tau)
 
     k, tau, mid = opt.k, opt.tau, opt.mid
     is_call = opt.option_type == "C"
 
-    iv = np.array(
-        [
-            implied_vol_jackel(price=mid, f=fwd, k=k, t=tau, df=disc, is_call=is_call)
-            for mid, k, tau, is_call, disc, fwd in zip(mid, k, tau, is_call, disc, fwd, strict=True)
-        ],
-        dtype=float,
+    iv = implied_black_vol(
+        price=mid,
+        fwd=fwd,
+        strike=k,
+        tau=tau,
+        disc=disc,
+        is_call=is_call,
     ).clip(0.02, 1.5)
 
-    vega = black76_vega(df=disc, f=fwd, k=k, t=tau, sigma=iv)
+    vega = black76_vega(fwd=fwd, strike=k, tau=tau, sigma=iv, disc=disc)
     return 1 / np.maximum(vega, 1e-6)
 
 
@@ -667,7 +954,6 @@ def calib_mixture_ivs(
     mkt: LinearEquityMarket,
     n_components: int,
     lw_type: str | None = None,
-    pdef: float = 0.0,
     x0: LogNormMixParams | None = None,
     transform_method: str = "base",
     t0_start_guess: str = "uninformative",
@@ -675,8 +961,27 @@ def calib_mixture_ivs(
     lambda_tm1_params: tuple[float, float, float] = (0.0, 0.0, 0.0),
     calendar_arb_bounds: NoArbBounds | None = None,
     lambda_ca_bounds: float = 0.0,
-) -> tuple[VolSurface, LogNormMixParams]:
-    """Calibrate a log-normal mixture model to each expiry slice."""
+) -> tuple[VolSurface, dict, dict]:
+    """Calibrate a log-normal mixture model to each expiry slice.
+
+    Args:
+        opt: Option chain iterable yielding (expiry_key, slice) pairs.
+        mkt: Linear equity market model (forwards, discount factors).
+        n_components: Number of mixture components.
+        lw_type: Loss-weight type ('uniform', 'vega', 'vega_and_spread').
+        x0: Starting parameters for the first slice (optional).
+        transform_method: Encoder name.
+        t0_start_guess: Initial-guess method for the first slice.
+        lambda_smoothing: Roughness penalty weight.
+        lambda_tm1_params: (lambda_w, lambda_mu, lambda_sigma) regularisation.
+        calendar_arb_bounds: Calendar-arbitrage bounds object.
+        lambda_ca_bounds: Calendar-arb penalty weight.
+
+    Returns:
+        Tuple of (VolSurface, params dict, stats dict).
+    """
+    _require_call_only(opt)
+
     if transform_method not in BIJECTION_METHODS:
         msg = f"Unsupported transform method: {transform_method}"
         raise ValueError(msg)
@@ -700,7 +1005,7 @@ def calib_mixture_ivs(
 
         # Obtain scalar discount factor and forward for this maturity.
         tau_vec = np.array([tau], dtype=float)
-        df = float(mkt.df(tau_vec)[0])
+        disc = float(mkt.df(tau_vec)[0])
         fwd = float(mkt.fwd(tau_vec)[0])
 
         if len(np.unique(opt_slice.k)) != len(opt_slice.k):
@@ -730,12 +1035,12 @@ def calib_mixture_ivs(
             transform_method_ = BIJECTION_1ST_SLICE_FALLBACK.get(transform_method, transform_method)
         else:
             transform_method_ = transform_method
-            p0 = _force_mu_to_unit_sum(prev_params, tau)
+            p0 = _normalize_fwd_scale(prev_params)
             lambda_w, lambda_mu, lambda_sigma = lambda_tm1_params
             if "totvar" in transform_method_ and prev_tau is not None:
                 # Adjust sigma to keep total variance constant
                 scaled_sigma = prev_params.sigma * np.sqrt(prev_tau / tau)
-                p0 = LogNormMixParams(w=p0.w, mu=p0.mu, sigma=scaled_sigma)
+                p0 = LogNormMixParams(w=p0.w, fwd_scale=p0.fwd_scale, sigma=scaled_sigma)
 
         bounds_df = None
         if calendar_arb_bounds is not None:
@@ -745,11 +1050,11 @@ def calib_mixture_ivs(
                 norm_denom = mkt.df(prev_tau) * mkt.fwd(prev_tau)
                 bounds_df["price_norm_lb"] = (
                     black76_price(
-                        df=mkt.df(prev_tau),
-                        f=mkt.fwd(prev_tau),
-                        k=k_tm1,
-                        t=prev_tau,
+                        fwd=mkt.fwd(prev_tau),
+                        strike=k_tm1,
+                        tau=prev_tau,
                         sigma=smiles[-1].vol(k_tm1),
+                        disc=mkt.df(prev_tau),
                         is_call=True,
                     )
                     / norm_denom
@@ -760,11 +1065,10 @@ def calib_mixture_ivs(
             k=k_sl,
             tau=tau,
             fwd=fwd,
-            df=df,
+            df=disc,
             mkt_prices=mid_sl,
             loss_weights=loss_weights,
             p0=p0,
-            pdef=pdef,
             prev_params=prev_params,
             lambda_w=lambda_w,
             lambda_mu=lambda_mu,
@@ -777,15 +1081,15 @@ def calib_mixture_ivs(
         )
 
         # Calculate summary statistics
-        model_price = _mixed_log_norm_call(
+        model_price = _mixed_log_norm_opt_price(
             w=fitted.w,
-            mu=fitted.mu,
+            fwd_scale=fitted.fwd_scale,
             sigma=fitted.sigma,
-            DF=df,
-            F=fwd,
-            K=k_sl,
+            disc=disc,
+            fwd=fwd,
+            strike=np.asarray(k_sl, dtype=float),
             tau=tau,
-            pdef=pdef,
+            is_call=True,
         )
 
         stats["_contracts"].append(
@@ -801,7 +1105,7 @@ def calib_mixture_ivs(
         )
 
         taus.append(float(tau))
-        smiles.append(_make_smile_fun(fitted, mkt, tau, pdef=pdef))
+        smiles.append(_make_smile_fun(fitted, mkt, tau))
         stats[t] = stats_t
         params[t] = {
             "tau": tau,
@@ -814,7 +1118,7 @@ def calib_mixture_ivs(
 
     # Surface level statistics and sanity checks
     # TODO @Marco: move to separate function.
-    df = pd.concat(
+    stats_df = pd.concat(
         [
             pd.DataFrame(
                 {
@@ -830,16 +1134,16 @@ def calib_mixture_ivs(
         ]
     )
 
-    bid_ask_width = df["ask"] - df["bid"]
-    iv_error_approx = (df["mid"] - df["model_price"]) * df["div_dp"]
-    outside_lower = (df["bid"] - df["model_price"]).clip(lower=0.0)
-    outside_upper = (df["model_price"] - df["ask"]).clip(lower=0.0)
+    bid_ask_width = stats_df["ask"] - stats_df["bid"]
+    iv_error_approx = (stats_df["mid"] - stats_df["model_price"]) * stats_df["div_dp"]
+    outside_lower = (stats_df["bid"] - stats_df["model_price"]).clip(lower=0.0)
+    outside_upper = (stats_df["model_price"] - stats_df["ask"]).clip(lower=0.0)
     outside_bid_ask_price_error = outside_lower + outside_upper
 
-    iv_error_outside_bid_ask = (outside_bid_ask_price_error * df["div_dp"]).abs()
-    in_bid_ask = (df["bid"] <= df["model_price"]) & (df["model_price"] <= df["ask"])
-    in_2x_bid_ask = (df["mid"] - 2 * bid_ask_width <= df["model_price"]) & (
-        df["model_price"] <= df["mid"] + 2 * bid_ask_width
+    iv_error_outside_bid_ask = (outside_bid_ask_price_error * stats_df["div_dp"]).abs()
+    in_bid_ask = (stats_df["bid"] <= stats_df["model_price"]) & (stats_df["model_price"] <= stats_df["ask"])
+    in_2x_bid_ask = (stats_df["mid"] - 2 * bid_ask_width <= stats_df["model_price"]) & (
+        stats_df["model_price"] <= stats_df["mid"] + 2 * bid_ask_width
     )
     max_error_key = iv_error_outside_bid_ask.idxmax()
     tau_at_max_error = float(max_error_key[0])
