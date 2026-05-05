@@ -17,7 +17,7 @@ from vol_risk.models.black76 import (
     black76_vega,
     bsm_price,
     bsm_spot_delta,
-    implied_vol,
+    implied_black_vol,
     implied_vol_simple,
 )
 
@@ -131,7 +131,7 @@ class TestBlack76(unittest.TestCase):
 
     def test_implied_vol_scalar(self) -> None:
         for row in self.df.itertuples(index=False):
-            iv = implied_vol(
+            iv = implied_black_vol(
                 price=row.price,
                 fwd=row.F,
                 strike=row.K,
@@ -151,7 +151,7 @@ class TestBlack76(unittest.TestCase):
 
     def test_implied_vol_vector(self) -> None:
         expected = self.df.sigma
-        result = implied_vol(
+        result = implied_black_vol(
             price=self.df.price,
             fwd=self.df.F,
             strike=self.df.K,

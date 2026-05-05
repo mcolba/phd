@@ -17,8 +17,7 @@ from vol_risk.models.black76 import (
     black76_price,
     black76_undisc_fwd_delta,
     black76_vega,
-    implied_vol,
-    implied_vol_jackel,
+    implied_black_vol,
 )
 from vol_risk.models.linear import LinearEquityMarket
 from vol_risk.vol_surface.moneyness import DeltaMoneyness, Moneyness
@@ -75,12 +74,12 @@ def _slice_total_variance(
 
     for strike, price in zip(option_slice.k, option_slice.mid, strict=True):
         clean_price = _clip_call_price(float(price), discount, forward, float(strike))
-        sigma = implied_vol_jackel(
+        sigma = implied_black_vol(
             price=clean_price,
-            f=forward,
-            k=float(strike),
-            t=tau,
-            df=discount,
+            fwd=forward,
+            strike=float(strike),
+            tau=tau,
+            disc=discount,
             is_call=True,
         )
         total_variance.append(max(float(sigma) ** 2 * tau, min_total_variance))
@@ -375,11 +374,11 @@ def soft_liquidity_filter(
 ) -> OptionChain:
     """Drop low-liquidity near-duplicate quotes."""
     iv_mid, iv_bid, iv_ask = [
-        implied_vol(
+        implied_black_vol(
             price=p,
+            fwd=lin_mkt.fwd(chain.tau),
             strike=chain.k,
             tau=chain.tau,
-            fwd=lin_mkt.fwd(chain.tau),
             disc=lin_mkt.df(chain.tau),
             is_call=chain.option_type == "C",
         )
@@ -455,13 +454,15 @@ def get_atmf_vol(sl: OptionSlice, le: LinearEquityMarket) -> float:
     z = np.polyfit(strike[mask], price[mask], deg)
     atm_price = np.poly1d(z)(fwd)
 
-    return implied_vol_jackel(
-        price=atm_price,
-        f=fwd,
-        k=fwd,
-        t=tau,
-        df=le.df(tau),
-        is_call=True,
+    return float(
+        implied_black_vol(
+            price=atm_price,
+            fwd=fwd,
+            strike=fwd,
+            tau=tau,
+            disc=le.df(tau),
+            is_call=True,
+        )
     )
 
 
@@ -634,18 +635,18 @@ def get_calendar_arb_upper_bounds(
         fwd, _ = info["fwd"], info["disc"]
         strike = fwd * np.exp(lm)
         sigma = np.clip(
-            implied_vol(
+            implied_black_vol(
                 price=price_norm * info["disc"] * fwd,
+                fwd=fwd,
                 strike=strike,
                 tau=tau,
-                fwd=fwd,
                 disc=info["disc"],
                 is_call=True,
             ),
             0.02,
             1.5,
         )
-        vega = black76_vega(df=info["disc"], f=fwd, k=strike, t=tau, sigma=sigma)
+        vega = black76_vega(fwd=fwd, strike=strike, tau=tau, sigma=sigma, disc=info["disc"])
         weight = info["disc"] * fwd / max(vega, 1e-6)
         rows.append(
             {

@@ -229,7 +229,7 @@ def _broadcast_and_flatten(*args, shape: tuple) -> list[np.ndarray]:
     return [np.broadcast_to(np.asarray(x), shape).ravel() for x in args]
 
 
-def implied_vol(
+def implied_black_vol(
     price: float | ArrayLike,
     fwd: float | ArrayLike,
     strike: float | ArrayLike,

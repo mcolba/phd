@@ -23,7 +23,6 @@ from vol_risk.calibration.transformers import (
     repair_arbitrage,
     soft_liquidity_filter,
 )
-from vol_risk.models.black76 import implied_vol
 from vol_risk.models.linear import LinearEquityMarket, LinearEquityParams, calib_linear_equity_market
 from vol_risk.vol_surface.interpl.mixture import LogNormMixParams, VolSurface, calib_mixture_ivs
 from vol_risk.vol_surface.moneyness import MONEYNESS_REGISTRY

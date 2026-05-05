@@ -17,7 +17,7 @@ if TYPE_CHECKING:
         VolSurface,
     )
 
-from vol_risk.models.black76 import implied_vol_jackel
+from vol_risk.models.black76 import implied_black_vol
 from vol_risk.vol_surface.moneyness import MONEYNESS_REGISTRY, Moneyness
 
 AXIS_LABELS = {
@@ -165,26 +165,30 @@ def _make_iv_plt_data(
     ask_arr = sl_raw.ask
 
     for i, (mid, bid, ask, k, opt_type) in enumerate(zip(sl_raw.mid, bid_arr, ask_arr, k_slice, opt_type_slice)):
-        iv_mid[i] = implied_vol_jackel(
-            price=float(mid),
-            f=fwd_slice,
-            k=float(k),
-            t=tau_slice,
-            df=df_slice,
-            is_call=opt_type == "C",
+        iv_mid[i] = float(
+            implied_black_vol(
+                price=float(mid),
+                fwd=fwd_slice,
+                strike=float(k),
+                tau=tau_slice,
+                disc=df_slice,
+                is_call=opt_type == "C",
+            )
         )
 
         sign = 1.0 if opt_type == "C" else -1.0
         time_value = max(sign * (lin_mkt.spot - k), 0.0)
         if bid > 0 and bid > time_value:
             try:
-                iv_bid[i] = implied_vol_jackel(
-                    price=float(bid),
-                    f=fwd_slice,
-                    k=float(k),
-                    t=tau_slice,
-                    df=df_slice,
-                    is_call=opt_type == "C",
+                iv_bid[i] = float(
+                    implied_black_vol(
+                        price=float(bid),
+                        fwd=fwd_slice,
+                        strike=float(k),
+                        tau=tau_slice,
+                        disc=df_slice,
+                        is_call=opt_type == "C",
+                    )
                 )
             except Exception:
                 iv_bid[i] = np.nan
@@ -193,13 +197,15 @@ def _make_iv_plt_data(
 
         if ask > 0:
             try:
-                iv_ask[i] = implied_vol_jackel(
-                    price=float(ask),
-                    f=fwd_slice,
-                    k=float(k),
-                    t=tau_slice,
-                    df=df_slice,
-                    is_call=opt_type == "C",
+                iv_ask[i] = float(
+                    implied_black_vol(
+                        price=float(ask),
+                        fwd=fwd_slice,
+                        strike=float(k),
+                        tau=tau_slice,
+                        disc=df_slice,
+                        is_call=opt_type == "C",
+                    )
                 )
             except Exception:
                 iv_ask[i] = np.nan
