@@ -8,6 +8,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pyarrow.dataset as ds
+import yaml
 
 from vol_risk.calibration.data_loaders import make_optionmetrics_chain
 from vol_risk.calibration.mixture_pipeline import (
@@ -30,13 +31,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+with (Path(__file__).parents[1] / "config.yaml").open("r") as stream:
+    scripts_config = yaml.safe_load(stream)["config"]
+
 plt.style.use("ggplot")
 
 N_COMPONENTS = 3
 MONEYNESS = "lkf"
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-OPTIONS_DIR = Path(r"D:\option_metrics\parquet")
+OPTIONS_DIR = Path(scripts_config["opt_data_dir"])
 
 EOD_DATE = "2007-12-31 00:00:00.000000000"
 TICKER = "SPX"

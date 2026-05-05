@@ -7,6 +7,7 @@ import shelve
 from pathlib import Path
 
 import pyarrow.dataset as ds
+import yaml
 from tqdm import tqdm
 
 from vol_risk.calibration.config.default_config import MixtureCalibIndexConfig
@@ -19,7 +20,10 @@ from vol_risk.calibration.mixture_pipeline import (
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LOG_FILE_PATH = PROJECT_ROOT / "results" / "logging" / "spx_ivs_calib.log"
 
-INPUT_PATH = Path(r"D:\option_metrics\parquet")
+with (Path(__file__).parents[1] / "config.yaml").open("r") as stream:
+    scripts_config = yaml.safe_load(stream)["config"]
+
+INPUT_PATH = Path(scripts_config["opt_data_dir"])
 OUTPUT_PATH = PROJECT_ROOT / "data" / "derived" / "mixture"
 
 run_key = contextvars.ContextVar("run_key", default="-")
