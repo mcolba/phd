@@ -93,10 +93,9 @@ class DeltaMoneyness(Moneyness):
 
     def value(self, *, strike: ArrayLike, tau: ArrayLike, sigma: ArrayLike, **_) -> ArrayLike:
         return black76_undisc_fwd_delta(
-            f=self.le.fwd(tau),
-            k=strike,
-            t=tau,
-            r=self.le.zero_rate(tau),
+            fwd=self.le.fwd(tau),
+            strike=strike,
+            tau=tau,
             sigma=sigma,
             is_call=True,
         )
@@ -104,9 +103,8 @@ class DeltaMoneyness(Moneyness):
     def invert(self, *, moneyness: ArrayLike, tau: ArrayLike, sigma: ArrayLike, **_) -> ArrayLike:
         return black76_undisc_fwd_delta_to_strike(
             delta=moneyness,
-            f=self.le.fwd(tau),
-            t=tau,
-            r=self.le.zero_rate(tau),
+            fwd=self.le.fwd(tau),
+            tau=tau,
             sigma=sigma,
             is_call=True,
         )
