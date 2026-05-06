@@ -37,7 +37,7 @@ def test_black_price(option_type: float, expected: float) -> None:
 
 
 @pytest.mark.parametrize(
-    ("option_type",),
+    ("option_type"),
     [
         pytest.param(1.0, id="call"),
         pytest.param(-1.0, id="put"),
