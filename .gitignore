@@ -37,6 +37,7 @@ Makefile
 # === Exclude folders ===
 data/
 _temp/
+_backup/
 _deprecated/
 third_party/heston/backup/
 
