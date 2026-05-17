@@ -1,6 +1,6 @@
 import datetime as dt
 from collections.abc import Generator
-from dataclasses import dataclass
+from dataclasses import InitVar, dataclass
 
 import numpy as np
 import pandas as pd
@@ -58,17 +58,19 @@ class OptionChain(OptionChainLike):
 
     _df: pd.DataFrame
     _calendar: DayCountCalendar
+    validate: InitVar[bool] = True
 
-    def __post_init__(self):
-        object.__setattr__(
-            self,
-            "_df",
-            (
-                option_chain_schema.validate(self._df).sort_values(
-                    ["expiry", "strike", "option_type"], ignore_index=True
-                )
-            ),
-        )
+    def __post_init__(self, validate: bool) -> None:
+        if validate:
+            object.__setattr__(
+                self,
+                "_df",
+                (
+                    option_chain_schema.validate(self._df).sort_values(
+                        ["expiry", "strike", "option_type"], ignore_index=True
+                    )
+                ),
+            )
 
     def __len__(self) -> int:
         return len(self._df)
@@ -145,8 +147,10 @@ class OptionChain(OptionChainLike):
 class OptionSlice(OptionChain):
     """Option chain data."""
 
-    def __post_init__(self) -> None:
-        super().__post_init__()
+    validate: InitVar[bool] = False
+
+    def __post_init__(self, validate: bool) -> None:
+        super().__post_init__(validate)
 
         n_expiries = self._df["expiry"].nunique()
         if n_expiries != 1:

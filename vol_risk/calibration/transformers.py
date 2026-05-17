@@ -1,6 +1,7 @@
 import logging
 import math
-from collections.abc import Callable
+import operator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from functools import partial, reduce
 
@@ -9,8 +10,9 @@ import pandas as pd
 from arbitragerepair import constraints
 
 # from arbitragerepair.repair import l1
-from cvxopt import matrix, solvers
-from scipy.interpolate import RBFInterpolator
+# from cvxopt import matrix, solvers
+from scipy import sparse
+from scipy.optimize import linprog
 
 from vol_risk.calibration.option_chain import NoArbBounds, OptionChain, OptionSlice
 from vol_risk.models.black76 import (
@@ -20,12 +22,22 @@ from vol_risk.models.black76 import (
     implied_black_vol,
 )
 from vol_risk.models.linear import LinearEquityMarket
-from vol_risk.vol_surface.moneyness import DeltaMoneyness, Moneyness
+from vol_risk.vol_surface.moneyness import MONEYNESS_REGISTRY, DeltaMoneyness, Moneyness
 
 log = logging.getLogger(__name__)
 
 # Type alias for a single transformation step
 ChainTransform = Callable[[OptionChain], OptionChain]
+
+# solvers.options["show_progress"] = False
+
+
+@dataclass(frozen=True)
+class ChainCutoff:
+    """Parameters passed to :func:`apply_cutoffs`."""
+
+    moneyness_type: str
+    bounds: tuple[float, float]
 
 
 def compose(*transforms: ChainTransform) -> ChainTransform:
@@ -73,6 +85,7 @@ def _slice_total_variance(
     total_variance = []
 
     for strike, price in zip(option_slice.k, option_slice.mid, strict=True):
+        # TODO @Marco: remove clipping (?)
         clean_price = _clip_call_price(float(price), discount, forward, float(strike))
         sigma = implied_black_vol(
             price=clean_price,
@@ -98,6 +111,7 @@ def liquidity_filter(
     mid_min: None | float = None,
     rel_bid_ask_max: None | float = None,
     min_ttm: None | int = None,
+    validate_chain: bool = False,
 ) -> OptionChain:
     """Filter an option chain for liquid contracts."""
     df = chain.df.copy()
@@ -118,9 +132,9 @@ def liquidity_filter(
     if min_ttm is not None:
         anchor_days = df["anchor"].to_numpy(dtype="datetime64[D]")
         expiry_days = df["expiry"].to_numpy(dtype="datetime64[D]")
-        mask &= np.busday_count(anchor_days, expiry_days) >= min_ttm
+        mask &= (expiry_days - anchor_days).astype(int) >= min_ttm
 
-    return chain.__class__(df.loc[mask, :], chain._calendar)
+    return chain.__class__(df.loc[mask, :], chain._calendar, validate=validate_chain)
 
 
 def _solve_weighted_l1_repair(
@@ -128,8 +142,6 @@ def _solve_weighted_l1_repair(
     vec_b: np.ndarray,
     price: np.ndarray,
     weights: np.ndarray | None = None,
-    solver: str = "glpk",
-    max_attempts: int = 2,
 ) -> np.ndarray:
     """Weighted version of the l1() arbitrage repair from arbitragerepair."""
     n_quote = mat_A.shape[1]
@@ -150,14 +162,15 @@ def _solve_weighted_l1_repair(
     A1 = np.vstack((A, -np.diag(np.ones(2 * n_quote))))
     b1 = np.hstack((b, np.zeros(2 * n_quote)))
 
+    # The original l1() implementation in arbitragerepair uses cvxopt, which can be very slow for large aparse problems.
+    """
     G = matrix(A1)
     h = matrix(b1)
     c = matrix(coeff)
 
-    """
-    Scale the constraint for numerical stability
-    A * (scale * epsilon) >= scale * b
-    """
+    # Scale the constraint for numerical stability
+    # A * (scale * epsilon) >= scale * b
+
     G *= 2.0
     h *= 2.0
 
@@ -179,6 +192,21 @@ def _solve_weighted_l1_repair(
     else:
         epsilon = []
         log.warning("Arbitrage repair optimal perturbation is not found.")
+    """
+
+    A1_sparse = sparse.csr_matrix(A1)
+    sol = linprog(
+        c=coeff,
+        A_ub=A1_sparse,
+        b_ub=b1,
+        method="highs-ds",
+    )
+
+    if sol.success:
+        epsilon = sol.x[:n_quote] - sol.x[n_quote:]
+    else:
+        epsilon = []
+        log.warning("Arbitrage repair optimal perturbation is not found.")
 
     return epsilon
 
@@ -189,12 +217,14 @@ def repair_arbitrage(
     synthetic_weight: float = 1.0,
     min_price: float | None = None,
     tolerance: float = 0.0,
-    solver: str = "glpk",
+    # solver: str = "glpk",
+    validate_chain: bool = False,
 ) -> OptionChain:
     """Repair static arbitrage on a call-only chain with heavier synthetic-quote penalties."""
     _require_call_only(chain)
+    idx_sorted = chain.df.reset_index(drop=True).sort_values(by=["expiry", "strike"]).index.to_numpy()
+    df = chain.df.iloc[idx_sorted].copy()
 
-    df = chain.df.copy()
     if "synthetic" not in df.columns:
         df["synthetic"] = False
 
@@ -203,9 +233,9 @@ def repair_arbitrage(
 
     df["repair_weight"] = np.where(df["synthetic"], synthetic_weight, 1.0)
 
-    tau = _as_float_array(chain.tau)
-    strike = _as_float_array(chain.k)
-    mid = _as_float_array(chain.mid)
+    tau = _as_float_array(chain.tau[idx_sorted])
+    strike = _as_float_array(chain.k[idx_sorted])
+    mid = _as_float_array(chain.mid[idx_sorted])
     disc = _as_float_array(market.df(tau))
     forward = _as_float_array(market.fwd(tau))
     undisc_mid = mid / disc
@@ -222,7 +252,6 @@ def repair_arbitrage(
             vec_b=vec_b,
             price=C1,
             weights=None,
-            solver=solver,
         )
 
         if len(epsilon) == 0:
@@ -240,30 +269,34 @@ def repair_arbitrage(
         #     log.error("Repair arbitrage has failed")
 
         _, C0 = normaliser.inverse_transform(K=K1, C=C1 + epsilon)
-        df.loc[:, "mid"] = C0 * disc
-        df.loc[:, "repair_adj"] = (C0 - undisc_mid) * disc
+        df.iloc[normaliser._order_mask, df.columns.get_loc("mid")] = C0 * disc  # noqa: SLF001
+        df.iloc[normaliser._order_mask, df.columns.get_loc("repair_adj")] = (C0 - undisc_mid) * disc  # noqa: SLF001
 
-    return chain.__class__(df, chain._calendar)
+    return chain.__class__(df, chain._calendar, validate=validate_chain)
 
 
 def append_synthetic_quotes() -> OptionChain:
     raise NotImplementedError
 
 
-def min_strikes_per_slice_filter(chain: OptionChain, n: int) -> OptionChain:
+def min_strikes_per_slice_filter(
+    chain: OptionChain,
+    n: int,
+    validate_chain: bool = False,
+) -> OptionChain:
     """Filter out expiry slices with fewer than n unique strikes."""
     if n <= 1:
         return chain
-    mask = chain.df.groupby("expiry")["strike"].transform("nunique") >= n
 
+    mask = chain.df.groupby("expiry")["strike"].transform("nunique") >= n
     if not mask.any():
         msg = f"No expiry slices have at least {n} unique strikes after filtering."
         raise ValueError(msg)
 
-    return chain.__class__(chain.df.loc[mask].copy(), chain._calendar)
+    return chain.__class__(chain.df.loc[mask].copy(), chain._calendar, validate=validate_chain)
 
 
-def remove_short_span_slices(chain: OptionChain) -> OptionChain:
+def remove_short_span_slices(chain: OptionChain, validate_chain: bool = False) -> OptionChain:
     """Remove expiry slices with unusually short strike spans compared to their neighbors."""
     span = chain.df.groupby("expiry")["strike"].agg(np.ptp).sort_index()
 
@@ -275,10 +308,10 @@ def remove_short_span_slices(chain: OptionChain) -> OptionChain:
     mask_mat.iloc[-1] = False
     mask = ~chain.df["expiry"].isin(span.index[mask_mat])
 
-    return chain.__class__(chain.df.loc[mask].copy(), chain._calendar)
+    return chain.__class__(chain.df.loc[mask].copy(), chain._calendar, validate=validate_chain)
 
 
-def make_otm_to_call(chain: OptionChain, le: LinearEquityMarket) -> OptionChain:
+def make_otm_to_call(chain: OptionChain, le: LinearEquityMarket, validate_chain: bool = False) -> OptionChain:
     """Create a call-only view of an option chain."""
     df = chain.df.copy()
     tau = chain.tau
@@ -291,7 +324,7 @@ def make_otm_to_call(chain: OptionChain, le: LinearEquityMarket) -> OptionChain:
     # OTM puts to ITM calls using put-call parity
     puts = df.loc[is_otm_p, :]
     p_tau = chain.tau[is_otm_p]
-    p_fwd_contract = le.df(p_tau) * (le.fwd(p_tau) - puts["strike"])
+    p_fwd_contract = le.df(p_tau) * (le.fwd(p_tau) - puts["strike"].to_numpy())
 
     puts = puts.assign(
         option_type="C",
@@ -301,7 +334,7 @@ def make_otm_to_call(chain: OptionChain, le: LinearEquityMarket) -> OptionChain:
         mid=p_fwd_contract + chain.mid[is_otm_p],
     )
 
-    return chain.__class__(pd.concat([calls, puts], ignore_index=True), chain._calendar)
+    return chain.__class__(pd.concat([calls, puts], ignore_index=True), chain._calendar, validate=validate_chain)
 
 
 def _filter_informative_values(
@@ -371,6 +404,7 @@ def soft_liquidity_filter(
     rel_bid_ask_soft_max: float = 0.20,
     min_lk_distance: float = 0.05,
     max_lk_distance: float | None = None,
+    validate_chain: bool = False,
 ) -> OptionChain:
     """Drop low-liquidity near-duplicate quotes."""
     iv_mid, iv_bid, iv_ask = [
@@ -388,7 +422,7 @@ def soft_liquidity_filter(
     # Remove qotes with invalid mid implied volatility
     mask0 = ~(np.isnan(iv_mid) | np.isinf(iv_mid) | (iv_mid < 1e-2) | (iv_mid > 2.0))
 
-    df = chain.df[mask0].copy()
+    df = chain.df.iloc[mask0].reset_index(drop=True).copy()
     mask = np.ones(df.shape[0], dtype=bool)
     iv_mid, iv_bid, iv_ask, tau = iv_mid[mask0], iv_bid[mask0], iv_ask[mask0], chain.tau[mask0]
 
@@ -431,7 +465,7 @@ def soft_liquidity_filter(
 
         mask[idx_sorted[~active]] = False
 
-    return OptionChain(df[mask].copy(), chain._calendar)
+    return OptionChain(df[mask].copy(), chain._calendar, validate=validate_chain)
 
 
 def get_atmf_vol(sl: OptionSlice, le: LinearEquityMarket) -> float:
@@ -468,37 +502,49 @@ def get_atmf_vol(sl: OptionSlice, le: LinearEquityMarket) -> float:
 
 def apply_cutoffs(
     chain: OptionChain,
-    moneyness: Moneyness,
-    bounds: tuple[float, float] = (-np.inf, np.inf),
+    cutoffs: Iterator[ChainCutoff],
+    lin_mkt: LinearEquityMarket,
+    op: str = "or",
+    validate_chain: bool = False,
 ) -> OptionChain:
     """Apply cutoffs to an option chain."""
-    if bounds[0] >= bounds[1]:
-        msg = f"Lower bound {bounds[0]} must be less than upper bound {bounds[1]}."
-        raise ValueError(msg)
 
-    if isinstance(moneyness, DeltaMoneyness):
-        ub, lb = bounds
-    else:
-        lb, ub = bounds
+    def _unpack_bounds(bounds: tuple[float, float], moneyness: Moneyness) -> tuple[float, float]:
+        if not isinstance(moneyness, DeltaMoneyness):
+            return bounds
+        return bounds[::-1]
 
-    filtered_frames = []
+    strikes = chain.k
+    tau = chain.tau
+    mask = np.zeros_like(strikes, dtype=bool)
 
-    for _, sl in chain:
-        strikes = sl.k
-        tau = sl.slice_tau
-        mask = np.ones_like(strikes, dtype=bool)
-        sigma = get_atmf_vol(sl, moneyness.le)
+    atmf_vol_map = {k: get_atmf_vol(sl, lin_mkt) for k, sl in chain}
+    atmf_vol = pd.Series(chain.expiry).map(atmf_vol_map).to_numpy(dtype=float)
+
+    for co in cutoffs:
+        inner_mask = np.ones_like(strikes, dtype=bool)
+
+        bounds, mn_convention = co.bounds, co.moneyness_type
+        moneyness_engine = MONEYNESS_REGISTRY[mn_convention](le=lin_mkt)
+
+        if bounds[0] >= bounds[1]:
+            msg = f"Lower bound {bounds[0]} must be less than upper bound {bounds[1]}."
+            raise ValueError(msg)
+
+        lb, ub = _unpack_bounds(bounds, moneyness_engine)
 
         if (lb is not None) and not np.isneginf(lb):
-            strike_lb = moneyness.invert(moneyness=lb, tau=tau, sigma=sigma)
-            mask &= strikes >= strike_lb
+            strike_lb = moneyness_engine.invert(moneyness=lb, tau=tau, sigma=atmf_vol)
+            inner_mask &= strikes >= strike_lb
+
         if (ub is not None) and not np.isposinf(ub):
-            strike_ub = moneyness.invert(moneyness=ub, tau=tau, sigma=sigma)
-            mask &= strikes <= strike_ub
+            strike_ub = moneyness_engine.invert(moneyness=ub, tau=tau, sigma=atmf_vol)
+            inner_mask &= strikes <= strike_ub
 
-        filtered_frames.append(sl.df.loc[mask].copy())
+        logic_op = operator.iand if op.lower() == "and" else operator.ior
+        mask = logic_op(mask, inner_mask)
 
-    return chain.__class__(pd.concat(filtered_frames, ignore_index=True), chain._calendar)
+    return chain.__class__(chain.df.iloc[mask, :], chain._calendar, validate=validate_chain)
 
 
 def _collect_slice_data(
@@ -574,7 +620,6 @@ def _sweep_one_wing(
             idx = np.argsort(prev["log_m"][prev_mask])[point_idx]
 
             ref_m = float(prev["log_m"][prev_mask][idx])
-            # ref_tv = float(prev["total_var"][prev_mask][idx])
             ref_price_norm = float(prev["price_norm"][prev_mask][idx])
 
             synthetics.append((cur["tau"], ref_m, ref_price_norm))
@@ -623,24 +668,21 @@ def get_calendar_arb_upper_bounds(
     for i in list(map(tuple, intervals_arr)):
         raw.extend(_sweep_one_wing(slice_data, i))
 
-    if not raw:
-        return None
-
-    # Build rows for the synthetic OptionChain
+    # Build carry-forward rows for the synthetic OptionChain
     tau_to_expiry = {s["tau"]: s["expiry"] for s in slice_data}
 
     rows = []
     for tau, lm, price_norm in raw:
         info = expiry_info[tau_to_expiry[tau]]
-        fwd, _ = info["fwd"], info["disc"]
+        fwd, disc = info["fwd"], info["disc"]
         strike = fwd * np.exp(lm)
         sigma = np.clip(
             implied_black_vol(
-                price=price_norm * info["disc"] * fwd,
+                price=price_norm * disc * fwd,
                 fwd=fwd,
                 strike=strike,
                 tau=tau,
-                disc=info["disc"],
+                disc=disc,
                 is_call=True,
             ),
             0.02,
@@ -661,6 +703,32 @@ def get_calendar_arb_upper_bounds(
             }
         )
 
+    # NaN-placeholder rows for gap intervals (no market data, no carry-forward).
+    for sd in slice_data:
+        tau_sd = sd["tau"]
+        for interval in intervals_arr:
+            m0, m1 = float(min(interval)), float(max(interval))
+            if not np.isfinite(m0) or not np.isfinite(m1):
+                continue
+            if ((sd["log_m"] > m0) & (sd["log_m"] <= m1)).any():
+                continue
+            if any(r[0] == tau_sd and m0 < r[1] <= m1 for r in raw):
+                continue
+            mid_lm = (m0 + m1) / 2.0
+            info = expiry_info[sd["expiry"]]
+            rows.append(
+                {
+                    "expiry": sd["expiry"],
+                    "strike": float(info["fwd"] * np.exp(mid_lm)),
+                    "lkf": float(mid_lm),
+                    "tau": float(tau_sd),
+                    "option_type": "C",
+                    "price_norm_ub": np.nan,
+                    "price_norm_lb": np.nan,
+                    "weight": np.nan,
+                }
+            )
+
     if not rows:
         return None
 
@@ -675,6 +743,9 @@ def get_calendar_arb_upper_bounds(
         pt.iloc[::-1, :] = np.minimum.accumulate(pt.iloc[::-1, :], axis=0)
         return pt.stack(future_stack=True).loc[_df.index].to_numpy()  # noqa: PD013
 
-    df["price_norm_ub"] = _force_monotonicity(df, "price_norm_ub")
+    # Apply monotonicity enforcement only to rows that carry a finite upper bound.
+    ub_mask = df["price_norm_ub"].notna()
+    if ub_mask.any():
+        df.loc[ub_mask, "price_norm_ub"] = _force_monotonicity(df.loc[ub_mask], "price_norm_ub")
 
     return NoArbBounds(df)

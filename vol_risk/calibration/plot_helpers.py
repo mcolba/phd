@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.markers import CARETDOWN, CARETUP
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -21,16 +22,18 @@ from vol_risk.models.black76 import implied_black_vol
 from vol_risk.vol_surface.moneyness import MONEYNESS_REGISTRY, Moneyness
 
 AXIS_LABELS = {
-    "k": "Strike",
-    "kf": "Forward moneyness",
-    "lkf": "Log-forward moneyness",
-    "slkf": "Std log-forward moneyness",
-    "delta": "Call delta",
+    "k": "$K$",
+    "kf": "$K/F$",
+    "lkf": "$\\ln(K/F)$",
+    "lkft": "$\\ln(K/F) / \\sqrt{\\tau}$",
+    "slkf": "$\\ln(K/F) / (\\sigma_{ATM} \\sqrt{\\tau})$",
+    "delta": "\\Delta_{call}",
 }
 
 AXIS_LIMITS = {
     "kf": (0.5, 1.5),
     "lkf": (-0.7, 0.7),
+    "lkft": (-1, 1),
     "slkf": (-5, 5),
     "delta": (0.01, 0.99),
 }
@@ -48,32 +51,6 @@ def _select_atm_sigma(k_slice: np.ndarray, fwd_value: float, iv_slice: np.ndarra
     if not np.isfinite(sigma) or sigma <= 0:
         sigma = 0.2
     return float(np.clip(sigma, 0.01, 1.0))
-
-
-def _compute_moneyness(
-    coord: str,
-    strikes: np.ndarray,
-    tau_vec: np.ndarray,
-    le: LinearEquityMarket,
-    sigma: float | None = None,
-) -> np.ndarray:
-    if coord == "k":
-        return strikes
-
-    model = MONEYNESS_REGISTRY.get(coord)(le)
-
-    if coord in ["lkf", "kf"]:
-        return model.value(strike=strikes, tau=tau_vec)
-    if coord in ["slkf", "delta"]:
-        if sigma is None:
-            msg = f"Sigma must be provided for coordinate '{coord}'"
-            raise ValueError(msg)
-        values = model.value(strike=strikes, tau=tau_vec, sigma=sigma)
-    else:
-        msg = f"Unsupported moneyness coordinate: {coord}"
-        raise ValueError(msg)
-
-    return values
 
 
 def _invert_moneyness_to_strike(
@@ -96,7 +73,7 @@ def _invert_moneyness_to_strike(
         "moneyness": np.asarray(moneyness, dtype=float),
         "tau": tau,
     }
-    if coord in ["slkf", "delta"]:
+    if model_cls.requires_sigma:
         sigma_atm = float(
             surface.vol(
                 np.asarray([le.fwd(tau)], dtype=float),
@@ -115,7 +92,7 @@ def make_mixture_rnd_function(params: LogNormMixParams, tau: float) -> Callable[
         raise ValueError(msg)
 
     w = np.asarray(params.w, dtype=float)
-    mu = np.asarray(params.mu, dtype=float)
+    mu = np.asarray(params.mu(tau), dtype=float)
     sigma = np.asarray(params.sigma, dtype=float)
 
     if not (w.shape == mu.shape == sigma.shape):
@@ -222,15 +199,13 @@ def _make_iv_plt_data(
     synthetic_series = sl_raw.df.get("synthetic", pd.Series(False, index=sl_raw.df.index))
     is_synthetic = synthetic_series.fillna(value=False).to_numpy(dtype=bool)
 
-    atm_sigma = _select_atm_sigma(k_slice=k_slice, fwd_value=fwd_slice, iv_slice=iv_mid)
+    moneyness_converter = MONEYNESS_REGISTRY.get(coord)(le=lin_mkt)
 
-    moneyness_vals = _compute_moneyness(
-        coord=coord,
-        strikes=k_slice,
-        tau_vec=tau_slice,
-        le=lin_mkt,
-        sigma=atm_sigma,
-    )
+    atm_sigma = None
+    if moneyness_converter and moneyness_converter.requires_sigma:
+        atm_sigma = _select_atm_sigma(k_slice=k_slice, fwd_value=fwd_slice, iv_slice=iv_mid)
+
+    moneyness_vals = moneyness_converter.value(strike=k_slice, tau=tau_slice, sigma=atm_sigma)
 
     return pd.DataFrame(
         {
@@ -247,21 +222,195 @@ def _make_iv_plt_data(
     )
 
 
+def _make_bounds_plt_data(
+    bounds_df: pd.DataFrame,
+    tau: float,
+    lin_mkt: LinearEquityMarket,
+    surface: VolSurface,
+    coord: str = "lkf",
+) -> pd.DataFrame:
+    """Build plotting data for no-arbitrage upper and lower bounds."""
+    if bounds_df.empty:
+        return pd.DataFrame(columns=["strike", "moneyness", "iv_ub", "iv_lb"])
+
+    strike = bounds_df["strike"].to_numpy(dtype=float)
+    tau_arr = np.full_like(strike, tau, dtype=float)
+    disc = float(lin_mkt.df(tau))
+    fwd = float(lin_mkt.fwd(tau))
+
+    moneyness_converter = MONEYNESS_REGISTRY.get(coord)(le=lin_mkt)
+    atm_sigma = None
+    if moneyness_converter.requires_sigma:
+        atm_sigma = float(
+            surface.vol(
+                np.asarray([fwd], dtype=float),
+                np.asarray([tau], dtype=float),
+            )[0]
+        )
+
+    moneyness_vals = moneyness_converter.value(strike=strike, tau=tau_arr, sigma=atm_sigma)
+
+    def _compute_bound_iv(column: str) -> np.ndarray:
+        iv = np.full_like(strike, np.nan, dtype=float)
+        if column not in bounds_df.columns:
+            return iv
+
+        price_norm = bounds_df[column].to_numpy(dtype=float)
+        valid = np.isfinite(price_norm) & (price_norm > 0.0)
+        valid_idx = np.flatnonzero(valid)
+        for current_idx in valid_idx:
+            try:
+                iv[current_idx] = float(
+                    implied_black_vol(
+                        price=float(price_norm[current_idx] * fwd * disc),
+                        fwd=fwd,
+                        strike=float(strike[current_idx]),
+                        tau=tau,
+                        disc=disc,
+                        is_call=True,
+                    )
+                )
+            except ValueError:
+                iv[current_idx] = np.nan
+
+        return iv
+
+    return pd.DataFrame(
+        {
+            "strike": strike,
+            "moneyness": moneyness_vals,
+            "iv_ub": _compute_bound_iv("price_norm_ub"),
+            "iv_lb": _compute_bound_iv("price_norm_lb"),
+        }
+    )
+
+
+def _plot_no_arb_bounds(
+    ax: plt.Axes,
+    bounds_df: pd.DataFrame,
+    tau: float,
+    lin_mkt: LinearEquityMarket,
+    surface: VolSurface,
+    coord: str,
+    idx: int,
+) -> None:
+    """Overlay no-arbitrage bounds as faint upper and lower markers."""
+    if bounds_df.empty:
+        return
+
+    df_bounds = _make_bounds_plt_data(
+        bounds_df=bounds_df,
+        tau=tau,
+        lin_mkt=lin_mkt,
+        surface=surface,
+        coord=coord,
+    )
+
+    for iv_col, marker, colour, label in [
+        ("iv_ub", CARETDOWN, "black", "Upper bound"),
+        ("iv_lb", CARETUP, "black", "Lower bound"),
+    ]:
+        mask = np.isfinite(df_bounds["moneyness"]) & np.isfinite(df_bounds[iv_col])
+        if coord in AXIS_LIMITS:
+            lower_bound, upper_bound = AXIS_LIMITS[coord]
+            mask &= df_bounds["moneyness"].between(lower_bound, upper_bound)
+
+        if not np.any(mask):
+            continue
+
+        ax.scatter(
+            df_bounds.loc[mask, "moneyness"],
+            df_bounds.loc[mask, iv_col],
+            c=colour,
+            s=10,
+            marker=marker,
+            alpha=0.65,
+            # edgecolors=colour,
+            linewidths=0.2,
+            label=label if idx == 0 else None,
+            zorder=3,
+        )
+
+
+_DENSITY_COORDS = {"lkf", "lkft", "kf"}
+
+
 def plot_mixture_density(
     ax: plt.Axes,
-    rnd: Callable[[np.ndarray], np.ndarray],
-    x_min: float = -1.0,
-    x_max: float = 1.0,
+    params: LogNormMixParams,
+    tau: float,
+    coord: str = "lkf",
+    x_min: float | None = None,
+    x_max: float | None = None,
     n: int = 400,
+    component_alpha: float = 0.35,
 ) -> None:
-    """Plot the risk-neutral density of log-returns on ax."""
-    x = np.linspace(x_min, x_max, n)
-    y = rnd(x)
+    """Plot the risk-neutral density on *ax*.
 
-    ax.plot(x, y, color="black", linewidth=1.0)
-    ax.set_xlabel("log-return X")
+    Parameters
+    ----------
+    coord : {"lkf", "lkft", "kf"}
+        ``"lkf"`` -- density of log-forward moneyness ln(K/F)
+        (mixture of normals).
+        ``"lkft"`` -- density of log-forward moneyness standardized
+        by sqrt(T), ln(K/F) / sqrt(T).
+        ``"kf"``  -- density of forward moneyness K/F
+        (mixture of log-normals, includes 1/m Jacobian).
+    x_min, x_max : float | None
+        Override axis limits.  When *None* the limits are taken from
+        ``AXIS_LIMITS[coord]``.
+    """
+    if coord not in _DENSITY_COORDS:
+        msg = f"coord must be one of {sorted(_DENSITY_COORDS)}, got {coord!r}"
+        raise ValueError(msg)
+
+    # Resolve axis limits
+    lo, hi = AXIS_LIMITS[coord]
+    x_min = x_min if x_min is not None else lo
+    x_max = x_max if x_max is not None else hi
+
+    w = np.asarray(params.w, dtype=float)
+    mu = np.asarray(params.mu(tau), dtype=float)
+    sigma = np.asarray(params.sigma, dtype=float)
+    var = sigma**2 * tau
+    mean = (mu - 0.5 * sigma**2) * tau
+    inv_sqrt_2pi = 1.0 / np.sqrt(2.0 * np.pi)
+
+    grid = np.linspace(x_min, x_max, n)
+
+    # ln(K/F) values used for the normal kernel
+    if coord == "lkf":
+        x = grid
+        jacobian = 1.0
+    elif coord == "lkft":
+        x = grid * np.sqrt(tau)
+        jacobian = np.sqrt(tau)
+    else:  # kf -- grid values are m = K/F > 0
+        x = np.log(grid)
+        jacobian = 1.0 / grid
+
+    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    mixture_density = np.zeros(n, dtype=float)
+
+    for j in range(len(w)):
+        comp_pdf = w[j] * inv_sqrt_2pi / np.sqrt(var[j]) * np.exp(-0.5 * (x - mean[j]) ** 2 / var[j]) * jacobian
+        mixture_density += comp_pdf
+        color = colors[j % len(colors)]
+        ax.fill_between(
+            grid,
+            comp_pdf,
+            alpha=component_alpha,
+            color=color,
+            label=f"comp {j + 1} (w={w[j]:.2f})",
+        )
+        ax.plot(grid, comp_pdf, color=color, linewidth=0.7, alpha=0.6)
+
+    ax.plot(grid, mixture_density, color="black", linewidth=1.0, label="mixture")
+
+    ax.set_xlabel(AXIS_LABELS.get(coord, "Moneyness"))
     ax.set_ylabel("Risk-neutral density")
     ax.tick_params(labelleft=False)
+    ax.legend(fontsize=7, loc="upper right")
     ax.grid(visible=True, linestyle="--", linewidth=0.5, alpha=0.5)
 
 
@@ -272,18 +421,23 @@ def plot_total_variance_curves(
     lin_mkt: LinearEquityMarket,
     surface: VolSurface,
     coord: str = "kf",
+    ca_tolerance: float = 1e-4,
 ) -> np.ndarray:
     """Plot total variance curves across maturities and return the values."""
-    x_min, x_max = AXIS_LIMITS.get(coord)
+    if coord not in ("kf", "lkf"):
+        msg = "coord must be either 'kf' or 'lkf' when plotting total variance curves."
+        raise ValueError(msg)
+
+    x_min, x_max = AXIS_LIMITS[coord]
     m_common = np.linspace(x_min, x_max, 100)
-    moneyness_model = MONEYNESS_REGISTRY.get(coord)(lin_mkt) if coord != "k" else None
+    model_cls = MONEYNESS_REGISTRY[coord]
+    moneyness_model = model_cls(lin_mkt)
 
     total_var = []
+    calendar_label_added = False
     for expiry in expiries_sorted:
         tau = float(params_ivs[expiry]["tau"])
-        if coord == "k":
-            k_grid = m_common
-        elif coord in ["slkf", "delta"]:
+        if model_cls.requires_sigma:
             sigma_atm = float(
                 surface.vol(
                     np.asarray([lin_mkt.fwd(tau)], dtype=float),
@@ -296,6 +450,25 @@ def plot_total_variance_curves(
         iv_model = surface.vol(k_grid, np.full_like(k_grid, tau, dtype=float))
         total_var_t = iv_model**2 * tau
         ax.plot(m_common, total_var_t, label=f"tau={tau:.2f}")
+
+        if total_var:
+            prev_total_var = total_var[-1]
+            calendar_mask = (
+                np.isfinite(total_var_t) & np.isfinite(prev_total_var) & (total_var_t < prev_total_var - ca_tolerance)
+            )
+            if np.any(calendar_mask):
+                ax.scatter(
+                    m_common[calendar_mask],
+                    total_var_t[calendar_mask],
+                    color="black",
+                    marker="x",
+                    s=18,
+                    linewidths=0.8,
+                    label="Calendar arbitrage" if not calendar_label_added else None,
+                    zorder=4,
+                )
+                calendar_label_added = True
+
         total_var.append(total_var_t)
 
     ax.set_xlabel(AXIS_LABELS.get(coord, "Moneyness"))
@@ -315,12 +488,21 @@ def plot_smile_and_mkt_grid(
     coord: str = "lkf",
     n_col: int = 3,
     title: str | None = None,
+    bounds: Mapping[object, pd.DataFrame | None] | None = None,
+    dpi: float = 120.0,
 ) -> tuple[plt.Figure, np.ndarray]:
     """Plot market implied vols against the fitted surface across expiries."""
     expiries = np.unique(chain_raw.expiry)
     n = expiries.size
     n_row = n // n_col + int(n % n_col > 0)
-    fig, axes = plt.subplots(n_row, n_col, sharex=True, sharey=True, figsize=(4 * n_col, 3 * n_row))
+    fig, axes = plt.subplots(
+        n_row,
+        n_col,
+        sharex=True,
+        sharey=True,
+        figsize=(4 * n_col, 3 * n_row),
+        dpi=dpi,
+    )
     axes = np.atleast_1d(axes).ravel()
 
     axis_label = AXIS_LABELS[coord]
@@ -330,6 +512,17 @@ def plot_smile_and_mkt_grid(
         ax = axes[idx]
         df_plt = _make_iv_plt_data(sl, chain_calib, lin_mkt, coord)
         plot_iv_slice(ax, df_plt, lin_mkt, surface, sl, coord, chain_raw.spot, idx, expiry)
+        bounds_df = None if bounds is None else bounds.get(expiry)
+        if bounds_df is not None:
+            _plot_no_arb_bounds(
+                ax=ax,
+                bounds_df=bounds_df,
+                tau=float(sl.tau[0]),
+                lin_mkt=lin_mkt,
+                surface=surface,
+                coord=coord,
+                idx=idx,
+            )
         sigma_max = max(sigma_max, df_plt.loc[df_plt["moneyness"].between(*AXIS_LIMITS[coord]), "iv_mid"].max())
 
     for j in range(idx + 1, axes.size):
@@ -369,14 +562,22 @@ def plot_mixture_smile_and_rnd(
     surface: VolSurface,
     params: LogNormMixParams,
     coord: str = "lkf",
-    x_min: float = -1.0,
-    x_max: float = 1.0,
+    density_coord: str | None = None,
     n: int = 400,
 ) -> tuple[plt.Figure, tuple[plt.Axes, plt.Axes]]:
-    """Create a figure with volatility smile and RND side by side."""
+    """Create a figure with volatility smile and RND side by side.
+
+    Parameters
+    ----------
+    density_coord : str | None
+        Coordinate for the density panel (``"lkf"``, ``"lkft"``, or ``"kf"``).
+        Defaults to *coord* when it is one of these, otherwise ``"lkf"``.
+    """
     assert chain_calib.slice_tau == chain_raw.slice_tau
     tau_slice = float(chain_calib.tau[0])
-    rnd = make_mixture_rnd_function(params=params, tau=tau_slice)
+
+    if density_coord is None:
+        density_coord = coord if coord in _DENSITY_COORDS else "lkf"
 
     fig, (ax_smile, ax_rnd) = plt.subplots(1, 2, figsize=(10, 4))
     # Prepare DataFrame for plotting
@@ -411,7 +612,13 @@ def plot_mixture_smile_and_rnd(
         fig.suptitle(title_text, y=0.95)
 
     ax_smile.legend()
-    plot_mixture_density(ax_rnd, rnd, x_min=x_min, x_max=x_max, n=n)
+    plot_mixture_density(
+        ax_rnd,
+        params=params,
+        tau=tau_slice,
+        coord=density_coord,
+        n=n,
+    )
 
     fig.tight_layout()
     return fig, (ax_smile, ax_rnd)
@@ -440,6 +647,7 @@ def plot_iv_3d_surface(
 
     strike_grid = None
     coord_grid = None
+    moneyness_converter = MONEYNESS_REGISTRY.get(coord)(le=lin_mkt)
     if axis_limits is None or coord == "k":
         strike_min = float(np.nanmin(chain.k))
         strike_max = float(np.nanmax(chain.k))
@@ -473,17 +681,15 @@ def plot_iv_3d_surface(
         if coord_grid is not None:
             coord_mesh[row_idx, :] = coord_grid
         else:
-            sigma = None
-            if coord in ["slkf", "delta"]:
+            atmf_sigma = None
+            if moneyness_converter and moneyness_converter.requires_sigma:
                 fwd_value = float(lin_mkt.fwd(tau))
-                sigma = _select_atm_sigma(k_slice=strike_row, fwd_value=fwd_value, iv_slice=iv_row)
+                atmf_sigma = surface.vol(fwd_value, tau)
 
-            coord_mesh[row_idx, :] = _compute_moneyness(
-                coord=coord,
-                strikes=strike_row,
-                tau_vec=tau_row,
-                le=lin_mkt,
-                sigma=sigma,
+            coord_mesh[row_idx, :] = moneyness_converter.value(
+                strike=strike_row,
+                tau=tau_row,
+                sigma=atmf_sigma,
             )
 
     valid_surface = np.isfinite(tau_mesh) & np.isfinite(coord_mesh) & np.isfinite(iv_mesh) & (iv_mesh > 0.0)
@@ -606,14 +812,11 @@ def plot_iv_slice(
     t_grid = np.full_like(k_grid, sl.slice_tau, dtype=float)
     iv_model = surface.vol(k_grid, t_grid)
 
-    atm_sigma = _select_atm_sigma(k_slice=k_grid, fwd_value=lin_mkt.fwd(sl.slice_tau), iv_slice=iv_model)
-    m_grid = _compute_moneyness(
-        coord=coord,
-        strikes=k_grid,
-        tau_vec=sl.slice_tau,
-        le=lin_mkt,
-        sigma=atm_sigma,
-    )
+    atm_sigma = None
+    moneyness_converter = MONEYNESS_REGISTRY.get(coord)(le=lin_mkt)
+    if moneyness_converter and moneyness_converter.requires_sigma:
+        atm_sigma = _select_atm_sigma(k_slice=k_grid, fwd_value=lin_mkt.fwd(sl.slice_tau), iv_slice=iv_model)
+    m_grid = moneyness_converter.value(strike=k_grid, tau=t_grid, sigma=atm_sigma)
 
     ax.plot(
         m_grid,

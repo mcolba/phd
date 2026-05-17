@@ -1,4 +1,4 @@
-from abc import ABC
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 import numpy as np
@@ -21,19 +21,33 @@ def register_moneyness(key: str):
     return decorator
 
 
-@register_moneyness("base")
-@register_moneyness("k")
 @dataclass(frozen=True)
 class Moneyness(ABC):
     """Abstract base class for moneyness calculations."""
 
     le: LinearEquityMarket
+    requires_sigma: bool = False
 
+    @abstractmethod
     def value(self, *args, **kwargs) -> ArrayLike:
         raise NotImplementedError
 
+    @abstractmethod
     def invert(self, *args, **kwargs) -> ArrayLike:
         raise NotImplementedError
+
+
+@register_moneyness("base")
+@register_moneyness("k")
+@dataclass(frozen=True)
+class Strike(Moneyness):
+    """Strike moneyness: K."""
+
+    def value(self, *, strike: ArrayLike, **_) -> ArrayLike:
+        return strike
+
+    def invert(self, *, moneyness: ArrayLike, **_) -> ArrayLike:
+        return moneyness
 
 
 @register_moneyness("ks")
@@ -72,10 +86,26 @@ class LogFwdMoneyness(Moneyness):
         return self.le.fwd(tau) * np.exp(moneyness)
 
 
+@register_moneyness("lkft")
+@dataclass(frozen=True)
+class TauScaledLogFwdMoneyness(Moneyness):
+    """Standardized log-forward moneyness: log(K/F) / sqrt(tau)."""
+
+    def value(self, *, strike: ArrayLike, tau: ArrayLike, **_) -> ArrayLike:
+        scaling = 1 / np.sqrt(tau)
+        return np.log(strike / self.le.fwd(tau)) * scaling
+
+    def invert(self, *, moneyness: ArrayLike, tau: ArrayLike, **_) -> ArrayLike:
+        scaling = 1 / np.sqrt(tau)
+        return np.exp(moneyness / scaling) * self.le.fwd(tau)
+
+
 @register_moneyness("slkf")
 @dataclass(frozen=True)
 class StdLogFwdMoneyness(Moneyness):
     """Standardized log-forward moneyness: log(K/F) / (sqrt(tau) * sigma)."""
+
+    requires_sigma: bool = True
 
     def value(self, *, strike: ArrayLike, tau: ArrayLike, sigma: ArrayLike, **_) -> ArrayLike:
         scaling = 1 / (np.sqrt(tau) * sigma)
@@ -90,6 +120,8 @@ class StdLogFwdMoneyness(Moneyness):
 @dataclass(frozen=True)
 class DeltaMoneyness(Moneyness):
     """Forward delta moneyness: delta(K, tau, sigma)."""
+
+    requires_sigma: bool = True
 
     def value(self, *, strike: ArrayLike, tau: ArrayLike, sigma: ArrayLike, **_) -> ArrayLike:
         return black76_undisc_fwd_delta(

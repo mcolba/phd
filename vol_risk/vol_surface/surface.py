@@ -109,14 +109,24 @@ class VolSurface:
 
     def _vol_at_scalar_maturity(self, k: np.ndarray, t: float) -> np.ndarray:
         """Helper: interpolate/extrapolate vols for scalar maturity t."""
+        if self._linear_model is None:
+            msg = "linear_model is required for forward-moneyness interpolation."
+            raise ValueError(msg)
+
         taus = self._taus
+        fwd_t = float(self._linear_model.fwd(t))
+        log_moneyness = np.log(k / fwd_t)
+
+        def _slice_vol(idx: int) -> np.ndarray:
+            strike = float(self._linear_model.fwd(float(taus[idx]))) * np.exp(log_moneyness)
+            return self._smiles[idx].vol(strike)
 
         # Flat extrapolation for maturities outside the known range.
         if t <= float(taus[0]):
-            return self._smiles[0].vol(k)
+            return _slice_vol(0)
 
         if t >= float(taus[-1]):
-            return self._smiles[-1].vol(k)
+            return _slice_vol(-1)
 
         # Interpolate in total variance
         hi = int(np.searchsorted(taus, t, side="left"))
@@ -125,8 +135,8 @@ class VolSurface:
         tau_lo = float(taus[lo])
         tau_hi = float(taus[hi])
 
-        vol_lo = self._smiles[lo].vol(k)
-        vol_hi = self._smiles[hi].vol(k)
+        vol_lo = _slice_vol(lo)
+        vol_hi = _slice_vol(hi)
 
         total_var_lo = (vol_lo**2) * tau_lo
         total_var_hi = (vol_hi**2) * tau_hi

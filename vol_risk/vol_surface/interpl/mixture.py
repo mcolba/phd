@@ -30,8 +30,9 @@ log = logging.getLogger(__name__)
 
 SIGMA_MAX = 4.0
 SIGMA_MIN = 0.03
-THETA_1_EPSILON = 0.05
-THETA_2_EPSILON = 0.15
+THETA_1_EPSILON = 0.03
+THETA_2_EPSILON = 1e-6
+CALENDAR_ARB_SOFTPLUS_BETA = 1e-6
 
 
 @dataclass(frozen=True, slots=True)
@@ -484,14 +485,14 @@ BOUNDS_METHODS = {
     "full_mu_unbounded": lambda n, sigma_min: (
         np.concatenate(
             [
-                np.repeat(0 + THETA_1_EPSILON, n - 1),
+                np.repeat(-np.inf, n - 1),
                 np.repeat(-np.inf, n - 1),
                 np.repeat(sigma_min, n),
             ]
         ),
         np.concatenate(
             [
-                np.repeat(np.pi / 2 - THETA_1_EPSILON, n - 1),
+                np.repeat(np.inf, n - 1),
                 np.repeat(np.inf, n - 1),
                 np.repeat(SIGMA_MAX, n),
             ]
@@ -516,11 +517,11 @@ BOUNDS_METHODS = {
 }
 
 
-def _normalize_fwd_scale(params: LogNormMixParams) -> LogNormMixParams:
-    """Normalize fwd_scale so that sum(w * fwd_scale) == 1 (martingale constraint)."""
-    ws_tot = np.dot(params.w, params.fwd_scale)
-    fwd_scale_new = params.fwd_scale / ws_tot
-    return LogNormMixParams(w=params.w, fwd_scale=fwd_scale_new, sigma=params.sigma)
+# def _normalize_fwd_scale(params: LogNormMixParams) -> LogNormMixParams:
+#     """Normalize fwd_scale so that sum(w * fwd_scale) == 1 (martingale constraint)."""
+#     ws_tot = np.dot(params.w, params.fwd_scale)
+#     fwd_scale_new = params.fwd_scale / ws_tot
+#     return LogNormMixParams(w=params.w, fwd_scale=fwd_scale_new, sigma=params.sigma)
 
 
 def softplus(x: np.ndarray, beta: float = 1.0) -> np.ndarray:
@@ -531,6 +532,135 @@ def softplus(x: np.ndarray, beta: float = 1.0) -> np.ndarray:
 def _softplus_deriv(x: np.ndarray, beta: float = 1.0) -> np.ndarray:
     """Derivative of softplus: sigmoid(x / beta)."""
     return special.expit(x / beta)
+
+
+def _extract_arb_bound(
+    df: pd.DataFrame,
+    column: str,
+    weight_column: str = "weight",
+) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """Extract (strike, bound_value, weight) for non-NaN rows of a bound column.
+
+    Args:
+        df: DataFrame with strike, bound, and weight columns.
+        column: Name of the bound-value column.
+        weight_column: Name of the weight column to use.
+
+    Returns:
+        Tuple of (strike, bound_value, weight) arrays, or None if column is
+        missing or all NaN.
+    """
+    if column not in df.columns:
+        return None
+    mask = df[column].notna()
+    if not mask.any():
+        return None
+    return (
+        df.loc[mask, "strike"].to_numpy(dtype=float),
+        df.loc[mask, column].to_numpy(dtype=float),
+        df.loc[mask, weight_column].to_numpy(dtype=float),
+    )
+
+
+def _arb_bound_residual(
+    param: LogNormMixParams,
+    arb_k: np.ndarray,
+    arb_val: np.ndarray,
+    arb_w: np.ndarray,
+    sign: float,
+    disc: float,
+    fwd: float,
+    tau: float,
+    beta: float = CALENDAR_ARB_SOFTPLUS_BETA,
+) -> np.ndarray:
+    """Softplus penalty residual for one side of calendar-arb bounds.
+
+    Args:
+        param: Current mixture parameters.
+        arb_k: Strikes for this bound side.
+        arb_val: Normalised bound values.
+        arb_w: Per-strike weights.
+        sign: +1 for upper bound, -1 for lower bound.
+        disc: Discount factor.
+        fwd: Forward price.
+        tau: Time to expiry.
+        beta: Softplus sharpness.
+
+    Returns:
+        Array of softplus penalty values.
+    """
+    prices_norm = _mixed_log_norm_opt_price(
+        w=param.w,
+        fwd_scale=param.fwd_scale,
+        sigma=param.sigma,
+        disc=disc,
+        fwd=fwd,
+        strike=arb_k,
+        tau=tau,
+        is_call=np.ones(len(arb_k), dtype=bool),
+    ) / (fwd * disc)
+    g = arb_w * sign * (prices_norm - arb_val)
+    return softplus(g, beta=beta)
+
+
+def _arb_bound_jac_rows(
+    param: LogNormMixParams,
+    arb_k: np.ndarray,
+    arb_val: np.ndarray,
+    arb_w: np.ndarray,
+    sign: float,
+    disc: float,
+    fwd: float,
+    tau: float,
+    lambda_ca: float,
+    J_enc: np.ndarray,
+    beta: float = CALENDAR_ARB_SOFTPLUS_BETA,
+) -> np.ndarray:
+    """Jacobian rows for one side of calendar-arb softplus penalty.
+
+    Args:
+        param: Current mixture parameters.
+        arb_k: Strikes for this bound side.
+        arb_val: Normalised bound values.
+        arb_w: Per-strike weights.
+        sign: +1 for upper bound, -1 for lower bound.
+        disc: Discount factor.
+        fwd: Forward price.
+        tau: Time to expiry.
+        lambda_ca: Calendar-arb penalty weight.
+        J_enc: Encoder Jacobian (3n, n_flat).
+        beta: Softplus sharpness.
+
+    Returns:
+        Jacobian block of shape (len(arb_k), n_flat).
+    """
+    is_call = np.ones(len(arb_k), dtype=bool)
+    J_price_params = _mixed_log_norm_opt_jac(
+        w=param.w,
+        fwd_scale=param.fwd_scale,
+        sigma=param.sigma,
+        disc=disc,
+        fwd=fwd,
+        strike=arb_k,
+        tau=tau,
+        is_call=is_call,
+    ) / (fwd * disc)
+
+    prices_norm = _mixed_log_norm_opt_price(
+        w=param.w,
+        fwd_scale=param.fwd_scale,
+        sigma=param.sigma,
+        disc=disc,
+        fwd=fwd,
+        strike=arb_k,
+        tau=tau,
+        is_call=is_call,
+    ) / (fwd * disc)
+
+    g = arb_w * sign * (prices_norm - arb_val)
+    sig = _softplus_deriv(g, beta=beta)
+    J = (np.sqrt(lambda_ca) * sig * arb_w * sign)[:, np.newaxis] * J_price_params
+    return J @ J_enc
 
 
 def excess_roughness(params: LogNormMixParams, tau: float, sigma_atm: float = 0.2) -> float:
@@ -558,21 +688,21 @@ def _smirk_start_guess(n: int, sigma_atm: float) -> LogNormMixParams:
         msg = "Number of components must be at least 2."
         raise ValueError(msg)
 
-    # Assign 5% weight to the first component and increasing weights thereafter
-    w_left = 0.05
+    # Assign 7.5% weight to the first component and increasing weights thereafter
+    w_left = 0.075
     w_scale = np.linspace(0.6, 1, n - 1)
     w_right = (1 - w_left) * w_scale / w_scale.sum()
     w0 = np.concatenate(([w_left], w_right))
 
     # Assign increasing fwd_scale
-    exp_mu_min = 0.8
+    exp_mu_min = 0.7
     exp_mu_left = np.linspace(exp_mu_min, 1, n - 1)
     partial_sum = np.dot(w0[:-1], exp_mu_left)
     exp_mu_right = (1 - partial_sum) / w0[-1]
     fwd_scale0 = np.concatenate([exp_mu_left, [exp_mu_right]])
 
     # Assign decreasing sigma
-    sigma0 = np.clip(piecewise_linspace([sigma_atm * 2, sigma_atm, sigma_atm * 0.5], n), SIGMA_MIN, SIGMA_MAX)
+    sigma0 = np.clip(piecewise_linspace([sigma_atm * 3, sigma_atm, sigma_atm * 0.5], n), SIGMA_MIN, SIGMA_MAX)
 
     return LogNormMixParams(w=w0, fwd_scale=fwd_scale0, sigma=sigma0)
 
@@ -584,7 +714,7 @@ def _uninformative_start_guess(n: int, sigma_atm: float) -> LogNormMixParams:
         raise ValueError(msg)
 
     w0 = np.repeat(1 / n, n)
-    exp_mu_min = 0.8
+    exp_mu_min = 0.7
     exp_mu_max = 2 - exp_mu_min
     fwd_scale0 = np.linspace(exp_mu_min, exp_mu_max, n)
     fwd_scale0 = fwd_scale0 / np.dot(w0, fwd_scale0)
@@ -632,7 +762,7 @@ def calib_mixture_smile(
         prev_params: Previous-slice params for regularisation.
         transform_method: Encoder name (one of BIJECTION_METHODS keys).
         lambda_w: Weight regularisation strength.
-        lambda_mu: Drift regularisation strength (penalises mu change).
+        lambda_mu: Forward-scale regularisation strength.
         lambda_sigma: Vol regularisation strength.
         lambda_ca_bounds: Calendar-arbitrage softplus penalty weight.
         sigma_atm: ATMF vol used for roughness baseline.
@@ -679,16 +809,13 @@ def calib_mixture_smile(
     s_w, s_fs, s_sig = _param_slices(n)
 
     # Arb-bounds pre-computation
-    arb_strikes = arb_ub = arb_lb = arb_weights = False
-    if no_arb_bounds is not None:
-        arb_strikes = no_arb_bounds["strike"].to_numpy()
-        arb_ub = no_arb_bounds["price_norm_ub"].to_numpy()
-        arb_weights = no_arb_bounds["weight"].to_numpy()
-        if "price_norm_lb" in no_arb_bounds.columns:
-            arb_lb = no_arb_bounds["price_norm_lb"].to_numpy()
+    arb_ub = arb_lb = None
+    if no_arb_bounds is not None and lambda_ca_bounds > 0.0:
+        arb_ub = _extract_arb_bound(no_arb_bounds, "price_norm_ub")
+        arb_lb = _extract_arb_bound(no_arb_bounds, "price_norm_lb", weight_column="weight_lb")
 
-    # Previous mu for regularisation
-    prev_mu = prev_params.mu(tau) if prev_params is not None else None
+    # Previous forward-scale factors for regularisation
+    prev_fwd_scale = prev_params.fwd_scale if prev_params is not None else None
 
     def _loss_function(x: np.ndarray) -> np.ndarray:
         param = unravel(x)
@@ -717,9 +844,8 @@ def calib_mixture_smile(
             weights = np.concatenate([weights, np.repeat(lambda_w, n)])
 
         if lambda_mu > 0.0 and prev_params is not None:
-            mu_current = param.mu(tau)
-            delta_mu = mu_current - prev_mu
-            residuals = np.concatenate([residuals, delta_mu])
+            delta_fwd_scale = param.fwd_scale - prev_fwd_scale
+            residuals = np.concatenate([residuals, delta_fwd_scale])
             weights = np.concatenate([weights, np.repeat(lambda_mu, n)])
 
         if lambda_sigma > 0.0 and prev_params is not None:
@@ -727,26 +853,17 @@ def calib_mixture_smile(
             residuals = np.concatenate([residuals, delta_sigma])
             weights = np.concatenate([weights, np.repeat(lambda_sigma, n)])
 
-        if arb_strikes is not None:
-            prices_norm = _mixed_log_norm_opt_price(
-                w=param.w,
-                fwd_scale=param.fwd_scale,
-                sigma=param.sigma,
-                disc=df,
-                fwd=fwd,
-                strike=arb_strikes,
-                tau=tau,
-                is_call=np.ones(len(arb_strikes), dtype=bool),
-            ) / (fwd * df)
+        if arb_ub is not None:
+            arb_k_ub, arb_val_ub, arb_w_ub = arb_ub
+            r_ub = _arb_bound_residual(param, arb_k_ub, arb_val_ub, arb_w_ub, +1.0, df, fwd, tau)
+            residuals = np.concatenate([residuals, r_ub])
+            weights = np.concatenate([weights, np.repeat(np.sqrt(lambda_ca_bounds), len(r_ub))])
 
-            arb_upper = softplus(arb_weights * (prices_norm - arb_ub), beta=1e-8)
-            residuals = np.concatenate([residuals, arb_upper])
-            weights = np.concatenate([weights, np.repeat(np.sqrt(lambda_ca_bounds), len(arb_upper))])
-
-            if arb_lb is not None:
-                arb_lower = softplus(arb_weights * (arb_lb - prices_norm), beta=1e-8)
-                residuals = np.concatenate([residuals, arb_lower])
-                weights = np.concatenate([weights, np.repeat(np.sqrt(lambda_ca_bounds), len(arb_lower))])
+        if arb_lb is not None:
+            arb_k_lb, arb_val_lb, arb_w_lb = arb_lb
+            r_lb = _arb_bound_residual(param, arb_k_lb, arb_val_lb, arb_w_lb, -1.0, df, fwd, tau)
+            residuals = np.concatenate([residuals, r_lb])
+            weights = np.concatenate([weights, np.repeat(np.sqrt(lambda_ca_bounds), len(r_lb))])
 
         return weights * residuals
 
@@ -772,10 +889,6 @@ def calib_mixture_smile(
 
         # --- Roughness penalty block (numerical Jacobian) ---
         if lambda_smoothing > 0.0:
-            roughness_val = excess_roughness(param, sigma_atm=sigma_atm, tau=tau)
-            sp_val = softplus(roughness_val, beta=0.1)
-            penalty = np.sqrt(sp_val)
-
             # Numerical Jacobian via centered differences on x
             eps = 1e-7
             jac_rough = np.zeros((1, n_flat), dtype=float)
@@ -800,11 +913,10 @@ def calib_mixture_smile(
             J_w_params[:, s_w] = np.eye(n)
             jac_rows.append(lambda_w * (J_w_params @ J_enc))
 
-        # --- Mu regularisation block ---
+        # --- Forward-scale regularisation block ---
         if lambda_mu > 0.0 and prev_params is not None:
-            # mu = log(fwd_scale) / tau => dmu_i/dfwd_scale_i = 1/(tau * fwd_scale_i)
             J_mu_params = np.zeros((n, 3 * n), dtype=float)
-            J_mu_params[:, s_fs] = np.diag(1.0 / (tau * param.fwd_scale))
+            J_mu_params[:, s_fs] = np.eye(n)
             jac_rows.append(lambda_mu * (J_mu_params @ J_enc))
 
         # --- Sigma regularisation block ---
@@ -814,47 +926,18 @@ def calib_mixture_smile(
             jac_rows.append(lambda_sigma * (J_sig_params @ J_enc))
 
         # --- No-arb bounds blocks ---
-        if arb_strikes is not None:
-            n_arb = len(arb_strikes)
-            is_call_arb = np.ones(n_arb, dtype=bool)
+        if arb_ub is not None:
+            arb_k_ub, arb_val_ub, arb_w_ub = arb_ub
+            jac_rows.append(
+                _arb_bound_jac_rows(param, arb_k_ub, arb_val_ub, arb_w_ub, +1.0, df, fwd, tau, lambda_ca_bounds, J_enc)
+            )
 
-            J_arb_params = _mixed_log_norm_opt_jac(
-                w=param.w,
-                fwd_scale=param.fwd_scale,
-                sigma=param.sigma,
-                disc=df,
-                fwd=fwd,
-                strike=arb_strikes,
-                tau=tau,
-                is_call=is_call_arb,
-            ) / (fwd * df)  # (n_arb, 3n)
-
-            prices_norm = _mixed_log_norm_opt_price(
-                w=param.w,
-                fwd_scale=param.fwd_scale,
-                sigma=param.sigma,
-                disc=df,
-                fwd=fwd,
-                strike=arb_strikes,
-                tau=tau,
-                is_call=is_call_arb,
-            ) / (fwd * df)
-
-            # Upper bound: softplus(arb_weight * (price_norm - ub))
-            g_ub = arb_weights * (prices_norm - arb_ub)
-            sig_ub = _softplus_deriv(g_ub, beta=1e-8)  # sigmoid
-            # d(softplus(g))/dx = sigmoid(g/beta) * dg/dx
-            # dg/dx = arb_weight * d(price_norm)/dx
-            J_arb_ub = (np.sqrt(lambda_ca_bounds) * sig_ub * arb_weights)[:, np.newaxis] * J_arb_params
-            jac_rows.append(J_arb_ub @ J_enc)
-
-            if arb_lb is not None:
-                # Lower bound: softplus(arb_weight * (lb - price_norm))
-                g_lb = arb_weights * (arb_lb - prices_norm)
-                sig_lb = _softplus_deriv(g_lb, beta=1e-8)
-                # dg/dx = -arb_weight * d(price_norm)/dx
-                J_arb_lb = (np.sqrt(lambda_ca_bounds) * sig_lb * (-arb_weights))[:, np.newaxis] * J_arb_params
-                jac_rows.append(J_arb_lb @ J_enc)
+        if arb_lb is not None:
+            arb_k_lb, arb_val_lb, arb_w_lb = arb_lb
+            jac_lb = _arb_bound_jac_rows(
+                param, arb_k_lb, arb_val_lb, arb_w_lb, -1.0, df, fwd, tau, lambda_ca_bounds, J_enc
+            )
+            jac_rows.append(jac_lb)
 
         return np.vstack(jac_rows)
 
@@ -865,6 +948,7 @@ def calib_mixture_smile(
         method="trf",
         bounds=bounds,
         x_scale="jac",
+        max_nfev=2000,
     )
 
     if not res.success:
@@ -927,7 +1011,7 @@ def _make_smile_fun(params: LogNormMixParams, le: LinearEquityMarket, tau: float
     return VolSmile(interpl=fun)
 
 
-def _vega_weights(opt: OptionChainLike, line_mkt: LinearEquityMarket) -> np.ndarray:
+def _inv_vega_weights(opt: OptionChainLike, line_mkt: LinearEquityMarket) -> np.ndarray:
     """Compute inverse-vega weights for loss weighting."""
     fwd = line_mkt.fwd(opt.tau)
     disc = line_mkt.df(opt.tau)
@@ -996,7 +1080,7 @@ def calib_mixture_ivs(
     prev_tau = None
     for t, opt_slice in opt:
         sigma_atm = get_atmf_vol(opt_slice, mkt)
-        div_dp = _vega_weights(opt_slice, mkt)
+        div_dp = _inv_vega_weights(opt_slice, mkt)
 
         k_sl = opt_slice.k
         mid_sl = opt_slice.mid
@@ -1028,13 +1112,14 @@ def calib_mixture_ivs(
 
         if prev_params is None:
             make_initial_guess = INITIAL_GUESS_METHODS[t0_start_guess]
-            p0 = make_initial_guess(n_components, sigma_atm=sigma_atm, tau=tau)
+            p0 = make_initial_guess(n_components, sigma_atm=sigma_atm)
             lambda_w = lambda_mu = lambda_sigma = 0.0
 
             transform_method_ = BIJECTION_1ST_SLICE_FALLBACK.get(transform_method, transform_method)
         else:
             transform_method_ = transform_method
-            p0 = _normalize_fwd_scale(prev_params)
+            # p0 = _normalize_fwd_scale(prev_params)
+            p0 = prev_params
             lambda_w, lambda_mu, lambda_sigma = lambda_tm1_params
             if "totvar" in transform_method_ and prev_tau is not None:
                 # Adjust sigma to keep total variance constant
@@ -1043,11 +1128,11 @@ def calib_mixture_ivs(
 
         bounds_df = None
         if calendar_arb_bounds is not None:
-            bounds_df = calendar_arb_bounds[t].call_ub
+            bounds_df = calendar_arb_bounds[t]._df.copy()
             if prev_tau is not None:
-                k_tm1 = bounds_df["strike"] / fwd * mkt.fwd(prev_tau)
+                k_tm1 = np.exp(bounds_df["lkf"]) * mkt.fwd(prev_tau)
                 norm_denom = mkt.df(prev_tau) * mkt.fwd(prev_tau)
-                bounds_df["price_norm_lb"] = (
+                lb_norm_prices = (
                     black76_price(
                         fwd=mkt.fwd(prev_tau),
                         strike=k_tm1,
@@ -1058,6 +1143,18 @@ def calib_mixture_ivs(
                     )
                     / norm_denom
                 )
+
+                lb_iv = implied_black_vol(
+                    price=lb_norm_prices * fwd * disc,
+                    fwd=fwd,
+                    strike=bounds_df["strike"],
+                    tau=tau,
+                    disc=disc,
+                    is_call=True,
+                ).clip(0.02, 1.5)
+                lb_vega = black76_vega(fwd=fwd, strike=bounds_df["strike"], tau=tau, sigma=lb_iv, disc=disc)
+                bounds_df.loc[:, "price_norm_lb"] = lb_norm_prices
+                bounds_df.loc[:, "weight_lb"] = disc * fwd / np.maximum(lb_vega, 1e-6)
 
         fitted, stats_t = calib_mixture_smile(
             n=n_components,
@@ -1105,6 +1202,7 @@ def calib_mixture_ivs(
 
         taus.append(float(tau))
         smiles.append(_make_smile_fun(fitted, mkt, tau))
+        stats_t["bounds_df"] = None if bounds_df is None else bounds_df.copy()
         stats[t] = stats_t
         params[t] = {
             "tau": tau,

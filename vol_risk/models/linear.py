@@ -260,6 +260,7 @@ def calib_linear_equity_market(opt: OptionChain, axes=None) -> tuple[LinearEquit
     q = -np.log(alpha[valid_idx] / spot) / tau[valid_idx]
 
     params = {
+        "spot": spot,
         "tau": tau[valid_idx],
         "r": r,
         "q": q,
