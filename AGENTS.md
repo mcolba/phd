@@ -11,6 +11,7 @@ Use this file as the high-level overview and, for more details, refer to:
 - [docs/style.md](docs/style.md) for style notes.
 - [docs/testing.py](docs/testing.md) for testing notes.
 
+Skills are stored in the [.agent](\.agents\skills) folder.
 
 ## Prefered Tech Stack
 - Numerics: NumPy, SciPy.

@@ -35,6 +35,7 @@ Makefile
 .venv/
 
 # === Exclude folders ===
+results/
 data/
 _temp/
 _backup/
