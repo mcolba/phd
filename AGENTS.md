@@ -8,8 +8,8 @@ This file is the primary repository instruction for any AI assistants working in
 Use this file as the high-level overview and, for more details, refer to:
 
 - [docs/architecture.md](docs/architecture.md) for architecture notes.
-- [docs/style.md](docs/style.md) for style notes.
-- [docs/testing.py](docs/testing.md) for testing notes.
+- [docs/python-style.md](docs/python-style.md) for style notes.
+- [docs/testing-framework.py](docs/testing-framework.md) for testing notes.
 
 Skills are stored in the [.agent](\.agents\skills) folder.
 
@@ -46,18 +46,19 @@ Skills are stored in the [.agent](\.agents\skills) folder.
 - Run Python code through `.venv\Scripts\python.exe`.
 - Install Python packages through `.venv\Scripts\python.exe -m pip install ...`.
 - Run tests through `.venv\Scripts\python.exe -m pytest`.
-- Run static-type checking `.venv\Scripts\python.exe -m mypy .\vol_risk`
+- Run static-type checking `.venv\Scripts\python.exe -m mypy .\vol_risk`.
 - Runtime dependencies are listed in `requirements.txt`.
 - Development dependencies are listed in `requirements-dev.txt`.
+- Save temporary scripts in `\scripts\_temp`.
 
 ## Architecture
 See [docs/architecture.md](docs/architecture.md) for core principles and design patterns.
 
 ## Coding Style
-See [docs/style.md](docs/style.md) for code standards and naming details.
+See [docs/python-style.md](docs/python-style.md) for code standards and naming details.
 
 ## Testing
-See [docs/testing.py](docs/testing.py) for detailed testing guidance.
+See [docs/testing-framework.py](docs/testing-framework.md) for detailed testing guidance.
 
 ## Numerical Standards
 - Public API: accept `ArrayLike`, validate, broadcast, and returns a normalised scalar/array output.

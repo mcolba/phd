@@ -9,11 +9,11 @@ Follow this workflow when reviewing code or code changes:
 
 2. **Check correctness**: Look for bugs, edge cases, broken assumptions, regressions, and incomplete handling of failure cases. If the code is implementing a mathematical algorithm, verify correctness and ensure a citation is available in the docstring.
 
-3. **Check maintainability**: Assess whether the code is simple, readable, modular, and consistent with existing architecture and style. See the [architecture](../../../docs/architecture.md) and [style](../../../docs/style.md) guidelines for reference.
+3. **Check maintainability**: Assess whether the code is simple, readable, modular, and consistent with existing architecture and style. See the [architecture](../../../docs/architecture.md) and [python-style](../../../docs/python-style.md) guidelines for reference.
 
 4. **Check performance**: Assess whether the code is efficient and identify any potential performance bottlenecks. If relevant, suggest running profiling to identify slow parts using Scalene.
 
-5. **Check tests**: Verify that all important behavior is covered by relevant tests. Point out missing or weak tests when needed. See the [testing](../../../docs/testing.md) guidelines for reference on testing standards.
+5. **Check tests**: Verify that all important behavior is covered by relevant tests. Point out missing or weak tests when needed. See the [testing-framework](../../../docs/testing-framework.md) guidelines for reference on testing standards.
 
 6. **Give actionable feedback**: Prioritize important issues. For each finding, explain the problem, impact, and suggested fix.
 

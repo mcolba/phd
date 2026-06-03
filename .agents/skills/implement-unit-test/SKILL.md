@@ -7,7 +7,7 @@ Follow this workflow when implementing or updating unit tests:
 
 1. Activete planning mode if available.
 
-2. Read the [docs/testing.md](../../../docs/testing.md) document to ensure the test implementation matches this repository's guidelines.
+2. Read the [docs/testing-framework.md](../../../docs/testing-framework.md) document to ensure the test implementation matches this repository's guidelines.
 
 3. Identify the exact behaviors to be tested and plan the test scope to be as narrow as possible. 
 
