@@ -5,6 +5,7 @@ applyTo: "**/*.py"
 
 ## Python Lenguage Rules
 - Use type hints for all functions' inputs and outputs.
+- Do not use type hints for variables.
 - Avoid mutable global states.
   
 

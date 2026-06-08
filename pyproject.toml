@@ -39,7 +39,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S101"]
+ # "tests/**/*.py" = ["S101"]
 
 # Exclude common directories
 exclude = []
@@ -49,6 +49,11 @@ convention = "google"
 
 [tool.ruff.lint.isort]
 known-first-party = ["vol_risk"]
+
+[tool.pytest.ini_options]
+markers = [
+  "slow: marks tests as slow to run",
+]
 
 # BUILD-TIME: Tools to compile C++ and create the package
 [build-system]
