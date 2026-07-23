@@ -72,9 +72,6 @@ log = logging.getLogger(__name__)
 
 TICKER = "SPX"
 OVEWRITE_EXISTING = True
-
-epsilon = 1e-8
-cutoff_cfg = ChainCutoff("delta", (epsilon, 1.0 - epsilon))
 CALIB_CONFIG = MixtureCalibIndexConfig
 # # ================================================================================================================== #
 
