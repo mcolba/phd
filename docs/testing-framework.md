@@ -53,7 +53,7 @@ Use `pytest` with focused unit tests for numerical kernels and integration tests
    - Test public wrappers from validated inputs through core numerical kernels.
    - Verify shape normalization, scalar/vector behavior, error propagation.
 
-2. **Optimisation routine integration tests**
+2. **Optimisation and calibration routine integration tests**
    - Use synthetic recovery tests: generate prices or data from known parameters, calibrate back from fixed initial guesses, and assert parameter recovery, objective improvement, and optimiser diagnostics with explicit tolerances.
    - Mark expensive calibration, multistart, Monte Carlo, or large-surface tests as `@pytest.mark.slow`.
 
