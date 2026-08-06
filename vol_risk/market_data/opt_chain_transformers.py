@@ -587,7 +587,7 @@ def _sweep_one_wing(
 
     carry_fwd = None
 
-    def _get_range_idx(m0, m1) -> np.ndarray:
+    def _get_range_idx(m0, m1) -> np.ndarray:  # noqa: ANN001
         if np.sign(m1) == 0:
             if np.isfinite(m1):
                 return -1
@@ -730,7 +730,7 @@ def get_calendar_arb_upper_bounds(
 
     df = pd.DataFrame(rows).sort_values(["expiry", "strike"], ignore_index=True)
 
-    def _force_monotonicity(df: pd.DataFrame, name="price_norm_ub") -> pd.DataFrame:
+    def _force_monotonicity(df: pd.DataFrame, name: str = "price_norm_ub") -> pd.DataFrame:
         """Force the upper bound to be non-increasing in log-moneyness."""
         _df = df.set_index(["expiry", "lkf"])[name].to_frame().copy()
 
