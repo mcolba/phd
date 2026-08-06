@@ -14,11 +14,13 @@ positive ``nu``).
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax.scipy.stats import norm
 
 from vol_risk.models.numerical.fourier.fft_jax import (
@@ -58,6 +60,57 @@ jax.tree_util.register_pytree_node(
 
 def _vg_mgf_base(order: jax.Array, sigma: jax.Array, nu: jax.Array, theta: jax.Array) -> jax.Array:
     return 1.0 - theta * nu * order - 0.5 * sigma * sigma * nu * order * order
+
+
+def warn_vgsi_fft_moment_condition(
+    *,
+    index_sigma: ArrayLike,
+    index_nu: ArrayLike,
+    index_theta: ArrayLike,
+    factor_loading: ArrayLike,
+    residual_sigma: ArrayLike,
+    residual_nu: ArrayLike,
+    residual_theta: ArrayLike,
+    damping: float,
+    context: str = "VGSI FFT",
+) -> None:
+    """Warn once when concrete VG parameter arrays do not support the FFT contour.
+
+    This host-only preflight is intended to run before a JIT-compiled pricing
+    function is called. It performs no JAX operations and therefore adds
+    nothing to the compiled pricing loop.
+    """
+    if not np.isfinite(damping) or damping <= 0.0:
+        msg = "damping must be finite and positive."
+        raise ValueError(msg)
+
+    order = damping + 1.0
+    beta = np.asarray(factor_loading, dtype=float)
+    idx_sigma = beta * np.asarray(index_sigma, dtype=float)
+    idx_nu = np.asarray(index_nu, dtype=float)
+    idx_theta = beta * np.asarray(index_theta, dtype=float)
+    res_sigma = np.asarray(residual_sigma, dtype=float)
+    res_nu = np.asarray(residual_nu, dtype=float)
+    res_theta = np.asarray(residual_theta, dtype=float)
+
+    index_base = 1.0 - idx_theta * idx_nu * order - 0.5 * idx_sigma * idx_sigma * idx_nu * order * order
+    residual_base = 1.0 - res_theta * res_nu * order - 0.5 * res_sigma * res_sigma * res_nu * order * order
+    index_base, residual_base = np.broadcast_arrays(index_base, residual_base)
+    invalid_index = ~np.isfinite(index_base) | (index_base <= 0.0)
+    invalid_residual = ~np.isfinite(residual_base) | (residual_base <= 0.0)
+    invalid = invalid_index | invalid_residual
+    invalid_count = int(np.count_nonzero(invalid))
+    if invalid_count == 0:
+        return
+
+    warnings.warn(
+        f"{context}: damping {damping:g} requires finite exponential moments of order {order:g}; "
+        f"{invalid_count} of {invalid.size} parameter sets violate the condition "
+        f"(index={np.count_nonzero(invalid_index)}, residual={np.count_nonzero(invalid_residual)}). "
+        "FFT prices may violate no-arbitrage bounds; use a smaller damping or constrain the parameters.",
+        RuntimeWarning,
+        stacklevel=2,
+    )
 
 
 def _vg_compensator(params: VGSIJaxParams, scale: jax.Array | float = 1.0) -> jax.Array:
@@ -252,4 +305,5 @@ __all__ = [
     "make_vgsi_cf",
     "vgsi_cf",
     "vgsi_price_jax",
+    "warn_vgsi_fft_moment_condition",
 ]

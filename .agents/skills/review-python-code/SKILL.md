@@ -1,5 +1,5 @@
 ---
-name: review-code
+name: review-python-code
 description: Use this skill when reviewing code changes for correctness, maintainability, performance, and consistency with repository conventions.
 ---
 

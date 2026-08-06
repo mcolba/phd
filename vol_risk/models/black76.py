@@ -246,7 +246,7 @@ def implied_black_vol(
     )
 
     if flat_is_call.dtype != bool:
-        msg = "is_call must be a boolean array where True indicates call options and False indicates put options."
+        msg = "is_call must be a boolean array."
         raise ValueError(msg)
 
     n = flat_price.size

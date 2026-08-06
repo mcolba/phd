@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import KW_ONLY, dataclass, field
+from functools import lru_cache
 from typing import TYPE_CHECKING
 
 import jax
@@ -15,6 +17,16 @@ if TYPE_CHECKING:
 
 JaxCharacteristicFunction = Callable[[jax.Array], jax.Array]
 JaxCallPriceFunction = Callable[[jax.Array], jax.Array]
+logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=1)
+def _log_x64_disabled_warning() -> None:
+    """Log the reduced-precision warning at most once per process."""
+    msg = (
+        "JAX x64 is disabled; the JAX FFT engine will use reduced precision."
+    )
+    logger.warning(msg)
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +105,9 @@ def _next_power_of_two(n: int) -> int:
 
 def make_jax_fft_call_grid(strike: ArrayLike, params: JaxFFTCallEngineParams) -> JaxFFTCallGrid:
     """Return a reusable JAX FFT grid covering the requested strikes."""
+    if not jax.config.jax_enable_x64:
+        _log_x64_disabled_warning()
+
     strike_1d = _as_positive_strikes(strike)
     grid_size = params.grid_size
     if grid_size is None:

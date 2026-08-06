@@ -223,15 +223,15 @@ def repair_arbitrage(
     """Repair static arbitrage on a call-only chain with heavier synthetic-quote penalties."""
     _require_call_only(chain)
     idx_sorted = chain.df.reset_index(drop=True).sort_values(by=["expiry", "strike"]).index.to_numpy()
-    df = chain.df.iloc[idx_sorted].copy()
+    df_sorted = chain.df.iloc[idx_sorted].copy()
 
-    if "synthetic" not in df.columns:
-        df["synthetic"] = False
+    if "synthetic" not in df_sorted.columns:
+        df_sorted["synthetic"] = False
 
-    if "repair_adj" not in df.columns:
-        df["repair_adj"] = 0.0
+    if "repair_adj" not in df_sorted.columns:
+        df_sorted["repair_adj"] = 0.0
 
-    df["repair_weight"] = np.where(df["synthetic"], synthetic_weight, 1.0)
+    df_sorted["repair_weight"] = np.where(df_sorted["synthetic"], synthetic_weight, 1.0)
 
     tau = _as_float_array(chain.tau[idx_sorted])
     strike = _as_float_array(chain.k[idx_sorted])
@@ -247,32 +247,28 @@ def repair_arbitrage(
 
     calendart_arbitrage = sum(n_beach[-3:])
     if calendart_arbitrage > 0:
+        arb_repair_mask = normaliser._order_mask  # noqa: SLF001
+        repair_weights = df_sorted["repair_weight"].to_numpy(dtype=float)[arb_repair_mask]
         epsilon = _solve_weighted_l1_repair(
             mat_A=mat_A,
             vec_b=vec_b,
             price=C1,
-            weights=None,
+            weights=repair_weights,
         )
 
         if len(epsilon) == 0:
             log.warning("No repair applied to the chain.")
             return chain
 
-        # from arbitragerepair import l1
-        # epsilon2 = l1(mat_A, vec_b, C1, solver="glpk")
-        # assert np.allclose(epsilon, epsilon2, atol=1e-6)
-
-        # _, _, _, n_beach_post_retair = constraints.detect(
-        #     T=T1, K=K1, C=C1 + epsilon, tolerance=tolerance, verbose=False
-        # )
-        # if sum(n_beach_post_retair) > 0:
-        #     log.error("Repair arbitrage has failed")
-
         _, C0 = normaliser.inverse_transform(K=K1, C=C1 + epsilon)
-        df.iloc[normaliser._order_mask, df.columns.get_loc("mid")] = C0 * disc  # noqa: SLF001
-        df.iloc[normaliser._order_mask, df.columns.get_loc("repair_adj")] = (C0 - undisc_mid) * disc  # noqa: SLF001
+        repair_disc = disc[arb_repair_mask]
+        repair_undisc_mid = undisc_mid[arb_repair_mask]
+        df_sorted.iloc[arb_repair_mask, df_sorted.columns.get_loc("mid")] = C0 * repair_disc
+        df_sorted.iloc[arb_repair_mask, df_sorted.columns.get_loc("repair_adj")] = (
+            C0 - repair_undisc_mid
+        ) * repair_disc
 
-    return chain.__class__(df, chain._calendar, validate=validate_chain)
+    return chain.__class__(df_sorted, chain._calendar, validate=validate_chain)
 
 
 def append_synthetic_quotes() -> OptionChain:
@@ -688,7 +684,7 @@ def get_calendar_arb_upper_bounds(
             0.02,
             1.5,
         )
-        vega = black76_vega(fwd=fwd, strike=strike, tau=tau, sigma=sigma, disc=info["disc"])
+        vega = black76_vega(fwd=fwd, strike=strike, tau=tau, sigma=sigma, disc=info["disc"]).item()
         weight = info["disc"] * fwd / max(vega, 1e-6)
         rows.append(
             {

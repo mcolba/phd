@@ -1,13 +1,21 @@
-import datetime as dt
-from collections.abc import Generator
+from __future__ import annotations
+
 from dataclasses import InitVar, dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 import pandera as pa
 from pandera.pandas import Check, Column, DataFrameSchema
 
+from vol_risk.models.black76 import implied_black_vol
 from vol_risk.protocols import Array, DayCountCalendar, OptionChainLike
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
+    from datetime import datetime
+
+    from vol_risk.models.linear import LinearEquityMarket
 
 
 def _ask_ge_bid_if_present(df: pd.DataFrame) -> bool:
@@ -137,7 +145,21 @@ class OptionChain(OptionChainLike):
         """Return the option types in the chain."""
         return self._to_array(self._df["option_type"])
 
-    def _group_by_expiry(self) -> Generator[tuple[dt.datetime, "OptionChain"], None, None]:
+    def imply_vol(self, lm: LinearEquityMarket) -> np.ndarray:
+        """Calculate implied volatilities for the option chain using Black-76 formula."""
+        fwd = lm.fwd(self.tau)
+        disc = lm.df(self.tau)
+        is_call = self.option_type == "C"
+        return implied_black_vol(
+            price=self.mid,
+            fwd=fwd,
+            strike=self.k,
+            tau=self.tau,
+            disc=disc,
+            is_call=is_call,
+        )
+
+    def _group_by_expiry(self) -> Generator[tuple[datetime, OptionChain], None, None]:
         """Yield (expiry, OptionChain) pairs grouped by expiry date."""
         for expiry, group_df in self._df.groupby("expiry"):
             yield expiry, OptionSlice(group_df.copy(), self._calendar)
@@ -207,13 +229,11 @@ def _has_no_calendar_arb_upper_bound(df: pd.DataFrame, tollerance: float = 1e-8)
     if ub.empty:
         return True
 
-    for option_type, opt_df in ub.groupby("option_type", sort=False):
-        opt_df = opt_df.sort_values(["expiry", "lkf"], ignore_index=True)
-
+    for option_type, ub_grp in ub.groupby("option_type", sort=False):
         seen_m = np.array([], dtype=float)
         seen_p = np.array([], dtype=float)
 
-        for _, grp in ub.groupby("expiry", sort=True):
+        for _, grp in ub_grp.groupby("expiry", sort=True):
             m = grp["lkf"].to_numpy(dtype=float)
             p = grp["price_norm_ub"].to_numpy(dtype=float)
 

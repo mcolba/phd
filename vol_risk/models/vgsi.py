@@ -15,9 +15,11 @@ The risk-neutral log-stock dynamics combine a market-index VG factor scaled by
 a loading $\beta$ with an independent idiosyncratic VG component, compensated
 so the discounted stock is a martingale (Eq. 5-6 of the reference).
 
-The default damping $\alpha = 0.03$ and the quadrature truncation breakpoints
-$(8, 64, 256)$ are taken from the MATLAB reference implementation listed in
-the appendix of the preprint DOI:10.1007/s10690-011-9151-7.
+The default Black-Scholes-controlled pricing path uses damping
+$\alpha = 0.03$, following the MATLAB reference implementation listed in the
+appendix of the preprint DOI:10.1007/s10690-011-9151-7. An uncontrolled FFT
+retains the generic engine default because small damping requires a much wider
+integration grid without the control variate.
 """
 
 from __future__ import annotations
@@ -38,6 +40,7 @@ if TYPE_CHECKING:
     from numpy.typing import ArrayLike
 
 _SMALL_NU = 1.0e-12
+VGSI_FFT_DEFAULT_DAMPING = 0.03
 
 EngineName = Literal["auto", "quad", "fft_np"]
 ControlName = Literal["none", "bs"]
@@ -69,6 +72,75 @@ class VGSIParams:
         if not np.isfinite(self.theta):
             msg = "VGSIParams.theta must be finite."
             raise ValueError(msg)
+
+
+@dataclass(frozen=True, slots=True)
+class CGMYParams:
+    r"""Variance-Gamma parameters in CGMY coordinates $(C, G, M)$.
+
+    The VG process is CGMY with $Y = 0$. The unit-moment martingale condition
+    $1 - \theta\nu - \tfrac12\sigma^2\nu > 0$ is equivalent to $M > 1$.
+
+    Attributes:
+        c: Activity rate $C = 1/\nu$. Positive.
+        g: Negative-jump decay rate $G$. Positive.
+        m: Positive-jump decay rate $M$. Positive.
+    """
+
+    c: float
+    g: float
+    m: float
+
+    def __post_init__(self) -> None:
+        if not np.isfinite(self.c) or self.c <= 0.0:
+            msg = "CGMYParams.c must be finite and positive."
+            raise ValueError(msg)
+        if not np.isfinite(self.g) or self.g <= 0.0:
+            msg = "CGMYParams.g must be finite and positive."
+            raise ValueError(msg)
+        if not np.isfinite(self.m) or self.m <= 0.0:
+            msg = "CGMYParams.m must be finite and positive."
+            raise ValueError(msg)
+
+
+def vg_to_cgmy(params: VGSIParams) -> CGMYParams:
+    r"""Convert VG $(\sigma, \nu, \theta)$ to CGMY $(C, G, M)$.
+
+    Uses $C = 1/\nu$, $G = (\,r - \theta\nu/2)^{-1}$, $M = (\,r + \theta\nu/2)^{-1}$
+    with $r = \sqrt{\theta^2\nu^2/4 + \sigma^2\nu/2}$. Requires $\nu > 0$.
+    """
+    if params.nu <= _SMALL_NU:
+        msg = "vg_to_cgmy requires nu > 0; the Brownian limit has no CGMY image."
+        raise ValueError(msg)
+    half_theta_nu = 0.5 * params.theta * params.nu
+    root = np.sqrt(half_theta_nu * half_theta_nu + 0.5 * params.sigma * params.sigma * params.nu)
+    return CGMYParams(
+        c=1.0 / params.nu,
+        g=1.0 / (root - half_theta_nu),
+        m=1.0 / (root + half_theta_nu),
+    )
+
+
+def cgmy_to_vg(params: CGMYParams) -> VGSIParams:
+    r"""Convert CGMY $(C, G, M)$ to VG $(\sigma, \nu, \theta)$.
+
+    Inverse of :func:`vg_to_cgmy`: $\nu = 1/C$, $\theta = C(1/M - 1/G)$,
+    $\sigma = \sqrt{2C/(GM)}$.
+    """
+    return VGSIParams(
+        sigma=float(np.sqrt(2.0 * params.c / (params.g * params.m))),
+        nu=1.0 / params.c,
+        theta=params.c * (1.0 / params.m - 1.0 / params.g),
+    )
+
+
+def esscher_tilt(params: CGMYParams, h: float) -> CGMYParams:
+    r"""Apply an Esscher tilt of size $h$: $(C, G, M) \mapsto (C, G+h, M-h)$.
+
+    $C$ (hence $\nu$) is preserved; vol and skew shift via $G, M$. The result
+    satisfies the unit-moment martingale condition iff $M - h > 1$.
+    """
+    return CGMYParams(c=params.c, g=params.g + h, m=params.m - h)
 
 
 @dataclass(frozen=True, slots=True)
@@ -328,11 +400,15 @@ def _vgsi_call_price(
 
     disc = np.exp(-r * tau)
 
+    engine_options = dict(engine_opt or {})
+
     if engine == "quad":
-        par = QuadEngineParams(**(engine_opt or {}))
+        par = QuadEngineParams(**engine_options)
         engine_obj = QuadCallEngine(cf=cf, control=cv, params=par, disc=disc, tau=tau)
     elif engine == "fft_np":
-        par = FFTEngineParams(**(engine_opt or {}))
+        if control == "bs":
+            engine_options.setdefault("damping", VGSI_FFT_DEFAULT_DAMPING)
+        par = FFTEngineParams(**engine_options)
         engine_obj = FFTCallEngine(cf=cf, control=cv, params=par, disc=disc)
     else:
         msg = f"Unsupported engine: {engine!r}"
@@ -473,6 +549,7 @@ def estimate_factor_residual_moments(
 
 
 __all__ = [
+    "VGSI_FFT_DEFAULT_DAMPING",
     "ControlName",
     "EngineName",
     "EngineParams",

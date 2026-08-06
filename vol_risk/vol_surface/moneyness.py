@@ -13,8 +13,8 @@ from vol_risk.models.linear import LinearEquityMarket
 MONEYNESS_REGISTRY = {}
 
 
-def register_moneyness(key: str):
-    def decorator(cls):
+def register_moneyness(key: str) -> callable:
+    def decorator(cls: type) -> type:
         MONEYNESS_REGISTRY[key] = cls
         return cls
 

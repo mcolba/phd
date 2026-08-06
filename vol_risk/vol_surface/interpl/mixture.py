@@ -1,6 +1,7 @@
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -33,6 +34,7 @@ SIGMA_MIN = 0.03
 THETA_1_EPSILON = 0.03
 THETA_2_EPSILON = 1e-6
 CALENDAR_ARB_SOFTPLUS_BETA = 1e-6
+KL_RESIDUAL_EPSILON = 1e-12
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,19 +78,6 @@ class LogNormMixParams(ModelParams):
         return np.log(self.fwd_scale) / tau
 
 
-@dataclass(frozen=True, slots=True)
-class LogNormMixCalibParams:
-    """Parameters for the log-normal mixture calibration model."""
-
-    bijection_factory: Callable
-    weight_function: Callable
-    lambda_rough: float
-    lambda_w: float
-    lambda_mu: float
-    lambda_sigma: float
-    x0: LogNormMixParams | None
-
-
 def _param_slices(n: int) -> tuple[slice, slice, slice]:
     """Return slices into stacked parameter vector [w | fwd_scale | sigma]."""
     return slice(0, n), slice(n, 2 * n), slice(2 * n, 3 * n)
@@ -118,18 +107,15 @@ def _mixed_log_norm_opt_price(
         np.asarray(is_call, dtype=bool),
     )
 
-    return (1 - pdef) * np.sum(
-        w[i]
-        * black76_price(
-            disc=disc,
-            fwd=fwd * fwd_scale[i] / (1 - pdef),
-            strike=strike,
-            tau=tau,
-            sigma=sigma[i],
-            is_call=is_call,
-        )
-        for i in range(len(w))
+    component_prices = black76_price(
+        disc=disc[..., np.newaxis],
+        fwd=fwd[..., np.newaxis] * fwd_scale / (1 - pdef),
+        strike=strike[..., np.newaxis],
+        tau=tau[..., np.newaxis],
+        sigma=sigma,
+        is_call=is_call[..., np.newaxis],
     )
+    return (1 - pdef) * np.sum(w * component_prices, axis=-1)
 
 
 def _mixed_log_norm_opt_jac(
@@ -299,7 +285,6 @@ def make_full_encoder(*__, method: str = "simplex") -> tuple:
             fwd_scale_n = (1.0 - partial_sum) / w[-1]
             fwd_scale = np.append(fwd_scale_free, fwd_scale_n)
 
-            # Quotient rule on (1 - w[:-1] @ x1) / w[-1]
             dfn_dx0 = (-(dw_dx0[:-1, :].T @ fwd_scale_free) - fwd_scale_n * dw_dx0[-1, :]) / w[-1]
             jac[s_fs.start + n - 1, sl_x0] = dfn_dx0
 
@@ -406,7 +391,6 @@ def make_full_encoder_totvar(tau: float, method: str = "simplex") -> tuple:
             fwd_scale_n = (1.0 - partial_sum) / w[-1]
             fwd_scale = np.append(fwd_scale_free, fwd_scale_n)
 
-            # Quotient rule on (1 - w[:-1] @ x1) / w[-1]
             dfn_dx0 = (-(dw_dx0[:-1, :].T @ fwd_scale_free) - fwd_scale_n * dw_dx0[-1, :]) / w[-1]
             jac[s_fs.start + n - 1, sl_x0] = dfn_dx0
 
@@ -524,14 +508,16 @@ BOUNDS_METHODS = {
 #     return LogNormMixParams(w=params.w, fwd_scale=fwd_scale_new, sigma=params.sigma)
 
 
-def softplus(x: np.ndarray, beta: float = 1.0) -> np.ndarray:
+def _softplus(x: ArrayLike, beta: float = 1.0) -> np.ndarray:
     """Smooth approximation to max(x, 0) with scale parameter beta."""
-    return beta * special.softplus(x / beta)
+    x_arr = np.asarray(x, dtype=float)
+    return np.asarray(beta * special.softplus(x_arr / beta))
 
 
-def _softplus_deriv(x: np.ndarray, beta: float = 1.0) -> np.ndarray:
+def _softplus_deriv(x: ArrayLike, beta: float = 1.0) -> np.ndarray:
     """Derivative of softplus: sigmoid(x / beta)."""
-    return special.expit(x / beta)
+    x_arr = np.asarray(x, dtype=float)
+    return np.asarray(special.expit(x_arr / beta))
 
 
 def _extract_arb_bound(
@@ -600,7 +586,7 @@ def _arb_bound_residual(
         is_call=np.ones(len(arb_k), dtype=bool),
     ) / (fwd * disc)
     g = arb_w * sign * (prices_norm - arb_val)
-    return softplus(g, beta=beta)
+    return _softplus(g, beta=beta)
 
 
 def _arb_bound_jac_rows(
@@ -663,19 +649,78 @@ def _arb_bound_jac_rows(
     return J @ J_enc
 
 
-def excess_roughness(params: LogNormMixParams, tau: float, sigma_atm: float = 0.2) -> float:
-    """Compute the excess roughness of a normal mixture density compared to a Gaussian density."""
-    # TODO @Marco: implement analytivcal.
-    z_grid = np.linspace(-2, 2, 500)
-    dz = z_grid[1] - z_grid[0]
-    mu = params.mu(tau)
-    d2f_dx2 = gaussian_mixture_density_second_derivative(z_grid, params.w, mu, params.sigma)
-    roughness = np.sum(d2f_dx2**2 * dz)
-    baseline = 3 / (8 * np.sqrt(np.pi) * sigma_atm**5)
-    return roughness - baseline
+def _terminal_log_return_gaussian_params(
+    params: LogNormMixParams,
+    tau: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return component mean and standard deviation of terminal log returns."""
+    sigma_terminal = np.asarray(params.sigma, dtype=float) * np.sqrt(tau)
+    mu_terminal = np.log(np.asarray(params.fwd_scale, dtype=float)) - 0.5 * sigma_terminal**2
+    return mu_terminal, sigma_terminal
 
 
-def piecewise_linspace(knots_val: ArrayLike, n: int) -> np.ndarray:
+def _kl_divergence_from_bs_with_jac(
+    params: LogNormMixParams,
+    tau: float,
+    sigma_atm: float = 0.2,
+) -> tuple[float, np.ndarray]:
+    """Compute KL(mixture || Black-Scholes) and its parameter Jacobian."""
+    w = np.asarray(params.w, dtype=float)
+    fwd_scale = np.asarray(params.fwd_scale, dtype=float)
+    sigma_model = np.asarray(params.sigma, dtype=float)
+    mu, sigma = _terminal_log_return_gaussian_params(params=params, tau=tau)
+    sigma_bs = sigma_atm * np.sqrt(tau)
+    mu_bs = -0.5 * sigma_bs**2
+
+    nodes, quadrature_weights = np.polynomial.hermite.hermgauss(64)
+    z = np.sqrt(2.0) * nodes
+    quadrature_weights = quadrature_weights / np.sqrt(np.pi)
+    x = mu[:, np.newaxis] + sigma[:, np.newaxis] * z
+
+    log_w = np.full_like(w, -np.inf)
+    np.log(w, out=log_w, where=w > 0.0)
+    centered = x[..., np.newaxis] - mu
+    log_components = log_w - np.log(sigma) - 0.5 * np.log(2.0 * np.pi) - 0.5 * (centered / sigma) ** 2
+    log_mixture = special.logsumexp(log_components, axis=-1)
+    log_bs = -np.log(sigma_bs) - 0.5 * np.log(2.0 * np.pi) - 0.5 * ((x - mu_bs) / sigma_bs) ** 2
+    log_ratio = log_mixture - log_bs
+
+    component_kl = np.sum(quadrature_weights * log_ratio, axis=1)
+    kl_divergence = float(np.dot(w, component_kl))
+
+    integrand = log_ratio + 1.0
+    grad_w = np.sum(quadrature_weights * integrand, axis=1)
+    grad_mu = w * np.sum(quadrature_weights * (z / sigma[:, np.newaxis]) * integrand, axis=1)
+    grad_sigma_terminal = w * np.sum(
+        quadrature_weights * ((z**2 - 1.0) / sigma[:, np.newaxis]) * integrand,
+        axis=1,
+    )
+    grad_fwd_scale = grad_mu / fwd_scale
+    grad_sigma = -tau * sigma_model * grad_mu + np.sqrt(tau) * grad_sigma_terminal
+    jac = np.concatenate([grad_w, grad_fwd_scale, grad_sigma])[np.newaxis, :]
+    return kl_divergence, jac
+
+
+def _kl_regularization_residual_with_jac(
+    params: LogNormMixParams,
+    tau: float,
+    sigma_atm: float,
+    strength: float,
+) -> tuple[float, np.ndarray]:
+    """Return a residual whose least-squares cost is linear in KL divergence."""
+    kl_divergence, kl_jac = _kl_divergence_from_bs_with_jac(
+        params=params,
+        tau=tau,
+        sigma_atm=sigma_atm,
+    )
+    kl_nonnegative = max(kl_divergence, 0.0)
+    residual = np.sqrt(2.0 * strength * (kl_nonnegative + KL_RESIDUAL_EPSILON))
+    if kl_divergence <= 0.0:
+        return float(residual), np.zeros_like(kl_jac)
+    return float(residual), strength * kl_jac / residual
+
+
+def _piecewise_linspace(knots_val: ArrayLike, n: int) -> np.ndarray:
     kx = np.linspace(-1, 1, len(knots_val))
     ky = np.asarray(knots_val)
     x = np.linspace(-1, 1, n)
@@ -702,7 +747,7 @@ def _smirk_start_guess(n: int, sigma_atm: float) -> LogNormMixParams:
     fwd_scale0 = np.concatenate([exp_mu_left, [exp_mu_right]])
 
     # Assign decreasing sigma
-    sigma0 = np.clip(piecewise_linspace([sigma_atm * 3, sigma_atm, sigma_atm * 0.5], n), SIGMA_MIN, SIGMA_MAX)
+    sigma0 = np.clip(_piecewise_linspace([sigma_atm * 3, sigma_atm, sigma_atm * 0.5], n), SIGMA_MIN, SIGMA_MAX)
 
     return LogNormMixParams(w=w0, fwd_scale=fwd_scale0, sigma=sigma0)
 
@@ -741,7 +786,7 @@ def calib_mixture_smile(
     prev_params: LogNormMixParams | None = None,
     transform_method: str = "simplex",
     lambda_w: float = 0.0,
-    lambda_mu: float = 0.0,
+    lambda_fwd_scale: float = 0.0,
     lambda_sigma: float = 0.0,
     lambda_ca_bounds: float = 0.0,
     sigma_atm: float = 0.2,
@@ -758,21 +803,21 @@ def calib_mixture_smile(
         mkt_prices: Market (mid) option prices.
         loss_weights: Per-observation loss weights.
         p0: Initial parameter guess.
-        lambda_smoothing: Roughness penalty weight.
+        lambda_smoothing: KL-divergence regularisation strength.
         prev_params: Previous-slice params for regularisation.
         transform_method: Encoder name (one of BIJECTION_METHODS keys).
         lambda_w: Weight regularisation strength.
-        lambda_mu: Forward-scale regularisation strength.
+        lambda_fwd_scale: Forward-scale regularisation strength.
         lambda_sigma: Vol regularisation strength.
         lambda_ca_bounds: Calendar-arbitrage softplus penalty weight.
-        sigma_atm: ATMF vol used for roughness baseline.
+        sigma_atm: ATMF vol defining the Black-Scholes reference density.
         no_arb_bounds: DataFrame with calendar-arb upper/lower bounds.
 
     Returns:
         Tuple of (fitted LogNormMixParams, statistics dict).
     """
     if p0 is None:
-        p0 = _uninformative_start_guess(n, sigma_atm=sigma_atm, tau=float(tau))
+        p0 = _uninformative_start_guess(n, sigma_atm=sigma_atm)
 
     if transform_method not in BIJECTION_METHODS:
         msg = f"Unsupported transform method: {transform_method}"
@@ -805,7 +850,6 @@ def calib_mixture_smile(
     is_call_price = np.ones(len(k_arr), dtype=bool)
     weights_base = np.broadcast_to(np.asarray(loss_weights, dtype=float), mkt_prices.shape)
     n_obs = len(mkt_prices)
-    n_flat = len(x0)
     s_w, s_fs, s_sig = _param_slices(n)
 
     # Arb-bounds pre-computation
@@ -834,19 +878,24 @@ def calib_mixture_smile(
         weights = weights_base.copy()
 
         if lambda_smoothing > 0.0:
-            penalty = np.sqrt(softplus(excess_roughness(param, sigma_atm=sigma_atm, tau=tau), beta=0.1))
-            residuals = np.concatenate([residuals, np.array([penalty])])
-            weights = np.concatenate([weights, np.array([lambda_smoothing])])
+            penalty, _ = _kl_regularization_residual_with_jac(
+                params=param,
+                tau=tau,
+                sigma_atm=sigma_atm,
+                strength=lambda_smoothing,
+            )
+            residuals = np.concatenate([residuals, np.atleast_1d(penalty)])
+            weights = np.concatenate([weights, np.ones(1)])
 
         if lambda_w > 0.0 and prev_params is not None:
             delta_w = param.w - prev_params.w
             residuals = np.concatenate([residuals, delta_w])
             weights = np.concatenate([weights, np.repeat(lambda_w, n)])
 
-        if lambda_mu > 0.0 and prev_params is not None:
+        if lambda_fwd_scale > 0.0 and prev_params is not None:
             delta_fwd_scale = param.fwd_scale - prev_fwd_scale
             residuals = np.concatenate([residuals, delta_fwd_scale])
-            weights = np.concatenate([weights, np.repeat(lambda_mu, n)])
+            weights = np.concatenate([weights, np.repeat(lambda_fwd_scale, n)])
 
         if lambda_sigma > 0.0 and prev_params is not None:
             delta_sigma = param.sigma - prev_params.sigma
@@ -887,24 +936,15 @@ def calib_mixture_smile(
 
         jac_rows = [J_price]
 
-        # --- Roughness penalty block (numerical Jacobian) ---
+        # --- KL regularisation block ---
         if lambda_smoothing > 0.0:
-            # Numerical Jacobian via centered differences on x
-            eps = 1e-7
-            jac_rough = np.zeros((1, n_flat), dtype=float)
-            for j in range(n_flat):
-                x_p = x.copy()
-                x_m = x.copy()
-                x_p[j] += eps
-                x_m[j] -= eps
-                p_p = unravel(x_p)
-                p_m = unravel(x_m)
-                r_p = excess_roughness(p_p, sigma_atm=sigma_atm, tau=tau)
-                r_m = excess_roughness(p_m, sigma_atm=sigma_atm, tau=tau)
-                sp_p = np.sqrt(softplus(r_p, beta=0.1))
-                sp_m = np.sqrt(softplus(r_m, beta=0.1))
-                jac_rough[0, j] = (sp_p - sp_m) / (2 * eps)
-            jac_rows.append(lambda_smoothing * jac_rough)
+            _, jac_kl_params = _kl_regularization_residual_with_jac(
+                params=param,
+                tau=tau,
+                sigma_atm=sigma_atm,
+                strength=lambda_smoothing,
+            )
+            jac_rows.append(jac_kl_params @ J_enc)
 
         # --- Weight regularisation block ---
         if lambda_w > 0.0 and prev_params is not None:
@@ -914,10 +954,10 @@ def calib_mixture_smile(
             jac_rows.append(lambda_w * (J_w_params @ J_enc))
 
         # --- Forward-scale regularisation block ---
-        if lambda_mu > 0.0 and prev_params is not None:
+        if lambda_fwd_scale > 0.0 and prev_params is not None:
             J_mu_params = np.zeros((n, 3 * n), dtype=float)
             J_mu_params[:, s_fs] = np.eye(n)
-            jac_rows.append(lambda_mu * (J_mu_params @ J_enc))
+            jac_rows.append(lambda_fwd_scale * (J_mu_params @ J_enc))
 
         # --- Sigma regularisation block ---
         if lambda_sigma > 0.0 and prev_params is not None:
@@ -1055,7 +1095,7 @@ def calib_mixture_ivs(
         x0: Starting parameters for the first slice (optional).
         transform_method: Encoder name.
         t0_start_guess: Initial-guess method for the first slice.
-        lambda_smoothing: Roughness penalty weight.
+        lambda_smoothing: KL-divergence regularisation strength.
         lambda_tm1_params: (lambda_w, lambda_mu, lambda_sigma) regularisation.
         calendar_arb_bounds: Calendar-arbitrage bounds object.
         lambda_ca_bounds: Calendar-arb penalty weight.
@@ -1075,6 +1115,8 @@ def calib_mixture_ivs(
 
     stats = {"_contracts": []}
 
+    # TODL @Marco: initial guess and previous params should be separate state variables,
+    # otjherwise the first slice will have erratic behaviour for total-variance encoders.
     prev_params = x0
 
     prev_tau = None
@@ -1113,14 +1155,13 @@ def calib_mixture_ivs(
         if prev_params is None:
             make_initial_guess = INITIAL_GUESS_METHODS[t0_start_guess]
             p0 = make_initial_guess(n_components, sigma_atm=sigma_atm)
-            lambda_w = lambda_mu = lambda_sigma = 0.0
+            lambda_w = lambda_fwd_scale = lambda_sigma = 0.0
 
             transform_method_ = BIJECTION_1ST_SLICE_FALLBACK.get(transform_method, transform_method)
         else:
             transform_method_ = transform_method
-            # p0 = _normalize_fwd_scale(prev_params)
             p0 = prev_params
-            lambda_w, lambda_mu, lambda_sigma = lambda_tm1_params
+            lambda_w, lambda_fwd_scale, lambda_sigma = lambda_tm1_params
             if "totvar" in transform_method_ and prev_tau is not None:
                 # Adjust sigma to keep total variance constant
                 scaled_sigma = prev_params.sigma * np.sqrt(prev_tau / tau)
@@ -1167,7 +1208,7 @@ def calib_mixture_ivs(
             p0=p0,
             prev_params=prev_params,
             lambda_w=lambda_w,
-            lambda_mu=lambda_mu,
+            lambda_fwd_scale=lambda_fwd_scale,
             lambda_sigma=lambda_sigma,
             transform_method=transform_method_,
             lambda_ca_bounds=lambda_ca_bounds,
@@ -1301,15 +1342,3 @@ def gaussian_mixture_density(x: ArrayLike, mix_weights: ArrayLike, mu: ArrayLike
     sigma_ = np.asarray(sigma, dtype=float)[np.newaxis, :]
     pdf = (1.0 / (sigma_ * np.sqrt(2 * np.pi))) * np.exp(-0.5 * ((x_ - mu_) / sigma_) ** 2)
     return (w_ * pdf).sum(axis=1)
-
-
-def gaussian_mixture_density_second_derivative(
-    x: ArrayLike, mix_weights: ArrayLike, mu: ArrayLike, sigma: ArrayLike
-) -> np.ndarray:
-    """Compute second derivative of Gaussian mixture density analytically."""
-    x_ = np.asarray(x, dtype=float)[:, np.newaxis]
-    w_ = np.asarray(mix_weights, dtype=float)[np.newaxis, :]
-    mu_ = np.asarray(mu, dtype=float)[np.newaxis, :]
-    s_ = np.asarray(sigma, dtype=float)[np.newaxis, :]
-    pdf = (1.0 / (s_ * np.sqrt(2 * np.pi))) * np.exp(-0.5 * ((x_ - mu_) / s_) ** 2)
-    return (w_ * pdf * ((x_ - mu_) ** 2 - s_**2) / s_**4).sum(axis=1)
