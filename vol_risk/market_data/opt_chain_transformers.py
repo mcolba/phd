@@ -14,7 +14,7 @@ from arbitragerepair import constraints
 from scipy import sparse
 from scipy.optimize import linprog
 
-from vol_risk.calibration.option_chain import NoArbBounds, OptionChain, OptionSlice
+from vol_risk.market_data.opt_chain import NoArbBounds, OptionChain, OptionSlice
 from vol_risk.models.black76 import (
     black76_price,
     black76_undisc_fwd_delta,

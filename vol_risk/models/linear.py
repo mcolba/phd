@@ -9,7 +9,7 @@ from numpy.typing import ArrayLike
 from scipy.interpolate import interp1d
 from sklearn.linear_model import LinearRegression
 
-from vol_risk.calibration.option_chain import OptionChain
+from vol_risk.market_data.opt_chain import OptionChain
 
 logger = logging.getLogger(__name__)
 

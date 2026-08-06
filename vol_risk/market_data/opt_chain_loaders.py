@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from vol_risk.calibration.option_chain import OptionChain
+from vol_risk.market_data.opt_chain import OptionChain
 from vol_risk.utils.calendar import Actual365Fixed
 
 _CBOE_RENAME: dict[str, str] = {

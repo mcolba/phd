@@ -10,7 +10,7 @@ from matplotlib.markers import CARETDOWN, CARETUP
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
-    from vol_risk.calibration.option_chain import (
+    from vol_risk.market_data.opt_chain import (
         Callable,
         LinearEquityMarket,
         LogNormMixParams,

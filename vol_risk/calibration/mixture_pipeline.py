@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from vol_risk.calibration.transformers import (
+from vol_risk.market_data.opt_chain_transformers import (
     ChainCutoff,
     apply_cutoffs,
     compose,
@@ -33,7 +33,7 @@ from vol_risk.vol_surface.interpl.mixture import LogNormMixParams, VolSurface, c
 from vol_risk.vol_surface.moneyness import MONEYNESS_REGISTRY
 
 if TYPE_CHECKING:
-    from vol_risk.calibration.option_chain import OptionChain
+    from vol_risk.market_data.opt_chain import OptionChain
 
 log = logging.getLogger(__name__)
 

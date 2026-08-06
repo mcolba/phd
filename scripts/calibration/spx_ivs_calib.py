@@ -11,11 +11,10 @@ import yaml
 from tqdm import tqdm
 
 from vol_risk.calibration.config.default_config import MixtureCalibIndexConfig
-from vol_risk.calibration.data_loaders import make_optionmetrics_chain
 from vol_risk.calibration.mixture_pipeline import (
-    ChainCutoff,
     run_mixture_pipeline,
 )
+from vol_risk.market_data.opt_chain_loaders import make_optionmetrics_chain
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LOG_FILE_PATH = PROJECT_ROOT / "results" / "logging" / "spx_ivs_calib.log"
