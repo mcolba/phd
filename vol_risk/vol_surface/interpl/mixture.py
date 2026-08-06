@@ -19,7 +19,7 @@ from vol_risk.models.black76 import (
 )
 from vol_risk.models.linear import LinearEquityMarket
 from vol_risk.protocols import ModelParams, OptionChainLike
-from vol_risk.util import (
+from vol_risk.utils.opt_transforms import (
     angles_to_simplex,
     angles_to_simplex_jac,
     make_ravel_param_jac,
