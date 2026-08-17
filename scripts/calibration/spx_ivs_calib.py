@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import contextvars
 import datetime as dt
 import logging
 import shelve
@@ -10,14 +9,14 @@ import pyarrow.dataset as ds
 import yaml
 from tqdm import tqdm
 
-from vol_risk.calibration.config.default_config import MixtureCalibIndexConfig
+from vol_risk.calibration.config.mixture_config import MixtureCalibIndexConfig
+from vol_risk.calibration.logging_utils import calibration_log_context, configure_calibration_logging
 from vol_risk.calibration.mixture_pipeline import (
     run_mixture_pipeline,
 )
 from vol_risk.market_data.opt_chain_loaders import make_optionmetrics_chain
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-LOG_FILE_PATH = PROJECT_ROOT / "results" / "logging" / "spx_ivs_calib.log"
 
 with (Path(__file__).parents[1] / "config.yaml").open("r") as stream:
     scripts_config = yaml.safe_load(stream)["config"]
@@ -25,57 +24,26 @@ with (Path(__file__).parents[1] / "config.yaml").open("r") as stream:
 INPUT_PATH = Path(scripts_config["opt_data_dir"])
 OUTPUT_PATH = PROJECT_ROOT / "data" / "derived" / "mixture"
 
-run_key = contextvars.ContextVar("run_key", default="-")
-
-
-class ContextFilter(logging.Filter):
-    def filter(self, record):
-        record.run_key = run_key.get()
-        return True
-
-
-file_handler = logging.FileHandler(LOG_FILE_PATH, mode="w")
-file_handler.setLevel(logging.WARNING)
-file_handler.setFormatter(
-    logging.Formatter(
-        fmt="%(asctime)s [%(run_key)s] - %(levelname)s - %(filename)s:%(lineno)d - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-)
-file_handler.addFilter(ContextFilter())
-
-
-class TqdmLoggingHandler(logging.Handler):
-    """Write log records via tqdm so they do not corrupt the progress bar."""
-
-    def emit(self, record: logging.LogRecord) -> None:
-        tqdm.write(self.format(record))
-        self.flush()
-
-
-stream_handler = TqdmLoggingHandler()
-stream_handler.setLevel(logging.WARNING)
-stream_handler.setFormatter(logging.Formatter("%(asctime)s [%(run_key)s] - %(levelname)s - %(message)s"))
-stream_handler.addFilter(ContextFilter())
-
-logging.basicConfig(
-    level=logging.INFO,
-    handlers=[
-        file_handler,
-        stream_handler,
-    ],
-)
 log = logging.getLogger(__name__)
 
 # ================================================== Configuration =================================================== #
 
 TICKER = "SPX"
+RUN_ID = "main"
 OVEWRITE_EXISTING = True
+LOG_FILE_NAME = f"{Path(__file__).stem}_{TICKER}_{RUN_ID}.log"
+FILE_LOG_LEVEL = logging.WARNING
+STREAM_LOG_LEVEL = logging.WARNING
 CALIB_CONFIG = MixtureCalibIndexConfig
 # # ================================================================================================================== #
 
 
 def main() -> None:
+    configure_calibration_logging(
+        log_file_name=LOG_FILE_NAME,
+        file_level=FILE_LOG_LEVEL,
+        stream_level=STREAM_LOG_LEVEL,
+    )
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     log.info("Opening parquet dataset at %s", INPUT_PATH)
@@ -87,33 +55,32 @@ def main() -> None:
     with shelve.open(str(OUTPUT_PATH)) as db:
         for t in tqdm(dates_str, desc="Calibrating", unit="date", dynamic_ncols=True):
             key = f"{TICKER}_{dt.datetime.fromisoformat(t).strftime(r'%Y%m%d')}"
-            run_key.set(key)
-
-            if key in db and not OVEWRITE_EXISTING:
-                log.info("Results for %s already exist, skipping", key)
-                continue
-
-            log.info("Calibrating %s", key)
-
-            try:
-                df = dataset.to_table(
-                    filter=ds.field("date") == t,
-                ).to_pandas()
-
-                if df.empty:
-                    log.warning("No data for %s, skipping", key)
+            with calibration_log_context(key):
+                if key in db and not OVEWRITE_EXISTING:
+                    log.info("Results for %s already exist, skipping", key)
                     continue
 
-                chain = make_optionmetrics_chain(df)
-                result = run_mixture_pipeline(chain, CALIB_CONFIG)
-                db[key] = {
-                    "date": dt.datetime.fromisoformat(t).date(),
-                    "params": result.params,
-                    "stats": result.stats,
-                }
+                log.info("Calibrating %s", key)
 
-            except Exception:
-                log.exception("Failed to calibrate %s", key)
+                try:
+                    df = dataset.to_table(
+                        filter=ds.field("date") == t,
+                    ).to_pandas()
+
+                    if df.empty:
+                        log.warning("No data for %s, skipping", key)
+                        continue
+
+                    chain = make_optionmetrics_chain(df)
+                    result = run_mixture_pipeline(chain, CALIB_CONFIG)
+                    db[key] = {
+                        "date": dt.datetime.fromisoformat(t).date(),
+                        "params": result.params,
+                        "stats": result.stats,
+                    }
+
+                except Exception:
+                    log.exception("Failed to calibrate %s", key)
 
     log.info("Done. Results saved to %s", OUTPUT_PATH)
 

@@ -87,7 +87,7 @@ def _normalized_call_prices(
 
     for i, tau in enumerate(tau_grid):
         fwd = float(lin_mkt.fwd(tau))
-        disc = float(lin_mkt.df(tau))
+        disc = float(lin_mkt.disc(tau))
         strike = fwd * np.exp(lkf_grid)
         sigma = surface.vol(k=strike, t=tau)
         call_price = black76_price(

@@ -148,7 +148,7 @@ class OptionChain(OptionChainLike):
     def imply_vol(self, lm: LinearEquityMarket) -> np.ndarray:
         """Calculate implied volatilities for the option chain using Black-76 formula."""
         fwd = lm.fwd(self.tau)
-        disc = lm.df(self.tau)
+        disc = lm.disc(self.tau)
         is_call = self.option_type == "C"
         return implied_black_vol(
             price=self.mid,

@@ -37,3 +37,4 @@ class MixtureCalibIndexConfig(MixtureCalibConfig):
     transform_method = "totvar_simplex"
     use_calendar_arb_bounds = True
     lambda_ca_bounds = 2
+

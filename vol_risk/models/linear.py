@@ -1,7 +1,8 @@
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from itertools import product
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -20,6 +21,7 @@ N_MIN = 5
 class LinearEquityParams:
     """Data class to hold the parameters of a linear equity market model."""
 
+    spot: float
     tau: np.ndarray
     r: np.ndarray
     q: np.ndarray
@@ -30,22 +32,24 @@ class LinearEquityMarket:
     """Linear model for equity pricing with forward price calculation."""
 
     spot: float
-    disc_curve: Callable
-    cont_carry_curve: Callable
+    disc_curve: Callable[[ArrayLike], np.ndarray | float]
+    cont_carry_curve: Callable[[ArrayLike], np.ndarray | float]
 
-    def fwd(self, tau: ArrayLike) -> ArrayLike:
+    def fwd(self, tau: ArrayLike) -> np.ndarray | float:
         """Calculate the forward price."""
+        tau = np.asarray(tau, dtype=float)
         return self.spot * np.exp(-self.cont_carry_curve(tau) * tau) / self.disc_curve(tau)
 
-    def df(self, tau: ArrayLike) -> ArrayLike:
+    def disc(self, tau: ArrayLike) -> np.ndarray | float:
         """Calculate the discount factor."""
         return self.disc_curve(tau)
 
-    def zero_rate(self, tau: ArrayLike) -> ArrayLike:
+    def zero_rate(self, tau: ArrayLike) -> np.ndarray | float:
         """Calculate the zero rate."""
+        tau = np.asarray(tau, dtype=float)
         return -np.log(self.disc_curve(tau)) / tau
 
-    def zero_dvd_yield(self, tau: ArrayLike) -> ArrayLike:
+    def zero_dvd_yield(self, tau: ArrayLike) -> np.ndarray | float:
         """Calculate the zero dividend yield."""
         return self.cont_carry_curve(tau)
 
@@ -55,8 +59,8 @@ def make_raw_interpolator(
     r: np.ndarray,
     add_zero_anchor: bool = True,
     flat_extrap: bool = True,
-) -> Callable[[ArrayLike], ArrayLike]:
-    """Create a discount curve using flat forward interpolation.
+) -> Callable[[ArrayLike], np.ndarray | float]:
+    """Create a zero rate curve using flat forward interpolation.
 
     Parameters:
     - tau: array of maturities (must be increasing)
@@ -64,17 +68,12 @@ def make_raw_interpolator(
     - add_zero_anchor: add a zero point at tau = 0 if True
 
     Returns:
-    - discount(t): function returning discount factor at time t (scalar or array)
+    - zero_rate(t): function returning the zero rate at time t (scalar or array)
 
     Source: https://downloads.dxfeed.com/specifications/dxLibOptions/HaganWest.pdf
     """
     tau = np.squeeze(np.asarray(tau))
     r = np.squeeze(np.asarray(r))
-
-    if tau.size == 1 and r.size == 1:
-        msg = "Need at least two points for raw interpolation. Returning a flat curve."
-        logger.warning(msg)
-        return lambda x: np.full_like(x, r, dtype=float)
 
     if tau.ndim != 1 or r.ndim != 1:
         msg = "tau and r must be 1-dimensional arrays."
@@ -85,9 +84,11 @@ def make_raw_interpolator(
     if np.any(np.diff(tau) <= 0):
         msg = "tau must be strictly increasing."
         raise ValueError(msg)
-    if tau.size < 2:
-        msg = "Need at least two points for interpolation and extrapolation."
-        raise ValueError(msg)
+
+    if tau.size == 1 and r.size == 1:
+        msg = "Need at least two points for raw interpolation. Returning a flat curve."
+        logger.warning(msg)
+        return lambda x: np.full_like(x, r[0], dtype=float)
 
     # Interpolate linearly in r * t = -log D(t)
     rt = tau * r
@@ -105,7 +106,7 @@ def make_raw_interpolator(
         bounds_error=False,
     )
 
-    def _zc(x: float | np.ndarray) -> float | np.ndarray:
+    def _zc(x: ArrayLike) -> np.ndarray | float:
         if flat_extrap:
             x = np.clip(x, tau[0], tau[-1])
 
@@ -120,10 +121,11 @@ def make_raw_disc_curve(
     tau: np.ndarray,
     r: np.ndarray,
     add_zero_anchor: bool = True,
-) -> Callable[[ArrayLike], ArrayLike]:
+) -> Callable[[ArrayLike], np.ndarray | float]:
+    """Create a discount factor curve using flat forward interpolation."""
     interp = make_raw_interpolator(tau=tau, r=r, add_zero_anchor=add_zero_anchor)
 
-    def _disc(x: float | np.ndarray) -> float | np.ndarray:
+    def _disc(x: ArrayLike) -> np.ndarray | float:
         x = np.asarray(x, dtype=float)
         y = np.exp(-interp(x) * x)
         return float(y) if np.ndim(x) == 0 else y
@@ -131,12 +133,12 @@ def make_raw_disc_curve(
     return _disc
 
 
-def make_simple_linear_market(s: float = 100.0, r: float = 0, q: float = 0) -> LinearEquityMarket:
+def make_simple_linear_market(spot: float = 100.0, r: float = 0, q: float = 0) -> LinearEquityMarket:
     """Creates a dummy linear market data object."""
     return LinearEquityMarket(
-        spot=s,
-        disc_curve=lambda tau: np.exp(-r * tau),
-        cont_carry_curve=lambda _: q,
+        spot=spot,
+        disc_curve=lambda tau: np.exp(-r * np.asarray(tau, dtype=float)),
+        cont_carry_curve=lambda tau: np.full_like(np.asarray(tau, dtype=float), q),
     )
 
 
@@ -167,7 +169,10 @@ def put_call_df(opt: OptionChain) -> pd.DataFrame:
     )
 
 
-def calib_linear_equity_market(opt: OptionChain, axes=None) -> tuple[LinearEquityMarket, dict]:
+def calib_linear_equity_market(
+    opt: OptionChain,
+    axes: Sequence[Any] | None = None,
+) -> tuple[LinearEquityMarket, LinearEquityParams, dict[object, object]]:
     """Calibrate a linear equity market model to an option chain.
 
     The put-call parity is used to extract implied interest rates (r) and income yields (q) via linear regression:
@@ -184,7 +189,7 @@ def calib_linear_equity_market(opt: OptionChain, axes=None) -> tuple[LinearEquit
     beta = np.empty(n, dtype=float)
 
     valid_idx = np.ones(n, dtype=bool)
-    stats = {}
+    stats: dict[object, object] = {}
 
     for i, (t, sl) in enumerate(opt):
         pc_df = put_call_df(sl)
@@ -192,6 +197,7 @@ def calib_linear_equity_market(opt: OptionChain, axes=None) -> tuple[LinearEquit
         y = pc_df["g_mid"].to_numpy(dtype=float)
 
         # Plot put-call differences scatter
+        # TODO(@Marco): move plotting out of this function.
         if axes is not None:
             moneyness = K.ravel() / opt.spot
             lb = pc_df["g_min"].to_numpy(dtype=float)
@@ -211,8 +217,8 @@ def calib_linear_equity_market(opt: OptionChain, axes=None) -> tuple[LinearEquit
             stats[t] = {
                 "coeff": (np.nan, np.nan),
                 "n_obs": int(pc_df.shape[0]),
-                "in_bid_ask": np.nan,
-                "tau": float(tau[i]),
+                "in_bid_ask": np.zeros(0, dtype=bool),
+                "tau": sl.slice_tau,
                 "excluded": True,
             }
             valid_idx[i] = False
@@ -230,9 +236,11 @@ def calib_linear_equity_market(opt: OptionChain, axes=None) -> tuple[LinearEquit
 
         # check if fitted line is within bid-ask bounds
         fitted = lr.predict(-K)
-        in_bid_ask_t = (fitted >= pc_df["g_min"]) & (fitted <= pc_df["g_max"])
+        g_min = pc_df["g_min"].to_numpy(dtype=float)
+        g_max = pc_df["g_max"].to_numpy(dtype=float)
+        in_bid_ask_t = (fitted >= g_min) & (fitted <= g_max)
 
-        if (in_bid_ask_t == False).sum() / len(pc_df) > 0.5:
+        if (~in_bid_ask_t).mean() > 0.5:
             msg = (
                 f"Fitted line for maturity {t} is not within the put-call bid-ask bounds "
                 f"for more than 50% of the strikes."
@@ -248,7 +256,7 @@ def calib_linear_equity_market(opt: OptionChain, axes=None) -> tuple[LinearEquit
         alpha[i] = alpha_t
         beta[i] = beta_t
         stats[t] = {
-            "coeff": (alpha_t, beta_t),
+            "coeff": (float(alpha_t), float(beta_t)),
             "n_obs": int(pc_df.shape[0]),
             "in_bid_ask": in_bid_ask_t,
             "tau": float(tau[i]),
@@ -259,12 +267,12 @@ def calib_linear_equity_market(opt: OptionChain, axes=None) -> tuple[LinearEquit
     r = -np.log(beta[valid_idx]) / tau[valid_idx]
     q = -np.log(alpha[valid_idx] / spot) / tau[valid_idx]
 
-    params = {
-        "spot": spot,
-        "tau": tau[valid_idx],
-        "r": r,
-        "q": q,
-    }
+    params = LinearEquityParams(
+        spot=float(spot),
+        tau=tau[valid_idx],
+        r=r,
+        q=q,
+    )
 
     model = LinearEquityMarket(
         spot=float(spot),

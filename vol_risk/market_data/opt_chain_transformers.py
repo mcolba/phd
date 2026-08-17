@@ -80,7 +80,7 @@ def _slice_total_variance(
         msg = "Synthetic quote augmentation requires strictly positive maturities."
         raise ValueError(msg)
 
-    discount = _as_scalar(market.df(tau))
+    discount = _as_scalar(market.disc(tau))
     forward = _as_scalar(market.fwd(tau))
     total_variance = []
 
@@ -236,7 +236,7 @@ def repair_arbitrage(
     tau = _as_float_array(chain.tau[idx_sorted])
     strike = _as_float_array(chain.k[idx_sorted])
     mid = _as_float_array(chain.mid[idx_sorted])
-    disc = _as_float_array(market.df(tau))
+    disc = _as_float_array(market.disc(tau))
     forward = _as_float_array(market.fwd(tau))
     undisc_mid = mid / disc
 
@@ -320,7 +320,7 @@ def make_otm_to_call(chain: OptionChain, le: LinearEquityMarket, validate_chain:
     # OTM puts to ITM calls using put-call parity
     puts = df.loc[is_otm_p, :]
     p_tau = chain.tau[is_otm_p]
-    p_fwd_contract = le.df(p_tau) * (le.fwd(p_tau) - puts["strike"].to_numpy())
+    p_fwd_contract = le.disc(p_tau) * (le.fwd(p_tau) - puts["strike"].to_numpy())
 
     puts = puts.assign(
         option_type="C",
@@ -409,7 +409,7 @@ def soft_liquidity_filter(
             fwd=lin_mkt.fwd(chain.tau),
             strike=chain.k,
             tau=chain.tau,
-            disc=lin_mkt.df(chain.tau),
+            disc=lin_mkt.disc(chain.tau),
             is_call=chain.option_type == "C",
         )
         for p in (chain.mid, chain.bid, chain.ask)
@@ -490,7 +490,7 @@ def get_atmf_vol(sl: OptionSlice, le: LinearEquityMarket) -> float:
             fwd=fwd,
             strike=fwd,
             tau=tau,
-            disc=le.df(tau),
+            disc=le.disc(tau),
             is_call=True,
         )
     )
@@ -553,7 +553,7 @@ def _collect_slice_data(
     for expiry, sl in chain:
         tau = sl.slice_tau
         fwd = _as_scalar(market.fwd(tau))
-        disc = _as_scalar(market.df(tau))
+        disc = _as_scalar(market.disc(tau))
         total_var, _, _ = _slice_total_variance(sl, market, min_total_variance)
         log_m = np.log(np.asarray(sl.k, dtype=float) / fwd)
         order = np.argsort(log_m)
