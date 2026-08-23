@@ -292,7 +292,7 @@ if __name__ == "__main__":
     r = 0.02
     q = 0.00
 
-    el_market = make_simple_linear_market(s=S, r=r, q=q)
+    le_market = make_simple_linear_market(spot=S, r=r, q=q)
 
     # True Heston params used to generate prices
     par_true = HestonParams(1, 0.09, 1, -0.3, 0.09)
@@ -302,13 +302,13 @@ if __name__ == "__main__":
     strikes = np.linspace(80.0, 120.0, n_obs)
 
     # Generate prices using the native pricer
-    prices = np.array([heston_price_cui(par_true, el_market, K, T) for K in strikes])
+    prices = np.array([heston_price_cui(par_true, le_market, K, T) for K in strikes])
 
     # Initial guess for calibration
     par_init = HestonParams(1.05, 0.08, 0.95, -0.35, 0.15)
 
     # Calibrate
-    par_opt, stats = heston_calibrator(par_init, el_market, prices, strikes, T)
+    par_opt, stats = heston_calibrator(par_init, le_market, prices, strikes, T)
 
     end_time = time.time()
 

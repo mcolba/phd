@@ -1009,7 +1009,7 @@ def calib_mixture_smile(
 def _make_smile_fun(params: LogNormMixParams, le: LinearEquityMarket, tau: float) -> VolSmile:
     """Construct a VolSmile object from calibrated log-normal mixture parameters."""
     tau = float(tau)
-    disc = le.df(tau)
+    disc = le.disc(tau)
     fwd = le.fwd(tau)
 
     sigma_max = np.max(params.sigma)
@@ -1054,7 +1054,7 @@ def _make_smile_fun(params: LogNormMixParams, le: LinearEquityMarket, tau: float
 def _inv_vega_weights(opt: OptionChainLike, line_mkt: LinearEquityMarket) -> np.ndarray:
     """Compute inverse-vega weights for loss weighting."""
     fwd = line_mkt.fwd(opt.tau)
-    disc = line_mkt.df(opt.tau)
+    disc = line_mkt.disc(opt.tau)
 
     k, tau, mid = opt.k, opt.tau, opt.mid
     is_call = opt.option_type == "C"
@@ -1130,7 +1130,7 @@ def calib_mixture_ivs(
 
         # Obtain scalar discount factor and forward for this maturity.
         tau_vec = np.array([tau], dtype=float)
-        disc = float(mkt.df(tau_vec)[0])
+        disc = float(mkt.disc(tau_vec)[0])
         fwd = float(mkt.fwd(tau_vec)[0])
 
         if len(np.unique(opt_slice.k)) != len(opt_slice.k):
@@ -1172,14 +1172,14 @@ def calib_mixture_ivs(
             bounds_df = calendar_arb_bounds[t]._df.copy()
             if prev_tau is not None:
                 k_tm1 = np.exp(bounds_df["lkf"]) * mkt.fwd(prev_tau)
-                norm_denom = mkt.df(prev_tau) * mkt.fwd(prev_tau)
+                norm_denom = mkt.disc(prev_tau) * mkt.fwd(prev_tau)
                 lb_norm_prices = (
                     black76_price(
                         fwd=mkt.fwd(prev_tau),
                         strike=k_tm1,
                         tau=prev_tau,
                         sigma=smiles[-1].vol(k_tm1),
-                        disc=mkt.df(prev_tau),
+                        disc=mkt.disc(prev_tau),
                         is_call=True,
                     )
                     / norm_denom

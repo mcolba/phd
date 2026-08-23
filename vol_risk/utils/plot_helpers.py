@@ -131,7 +131,7 @@ def _make_iv_plt_data(
     k_slice = sl_raw.k
     opt_type_slice = sl_raw.option_type
 
-    df_slice = float(lin_mkt.df(tau_slice))
+    df_slice = float(lin_mkt.disc(tau_slice))
     fwd_slice = float(lin_mkt.fwd(tau_slice))
 
     iv_mid = np.empty_like(k_slice, dtype=float)
@@ -235,7 +235,7 @@ def _make_bounds_plt_data(
 
     strike = bounds_df["strike"].to_numpy(dtype=float)
     tau_arr = np.full_like(strike, tau, dtype=float)
-    disc = float(lin_mkt.df(tau))
+    disc = float(lin_mkt.disc(tau))
     fwd = float(lin_mkt.fwd(tau))
 
     moneyness_converter = MONEYNESS_REGISTRY.get(coord)(le=lin_mkt)
