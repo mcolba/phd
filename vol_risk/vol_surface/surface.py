@@ -110,7 +110,7 @@ class VolSurface:
         k = self._linear_model.fwd(t)
         return self.vol(k, t)
 
-    def vol_at_delta(self, delta: ArrayLike, tau: ArrayLike) -> tuple[float | np.ndarray, float | np.ndarray]:
+    def vol_at_delta(self, delta: ArrayLike, tau: ArrayLike) -> float | np.ndarray:
         """Find strikes whose own surface IV gives the requested Black delta."""
         if self._linear_model is None:
             msg = "linear_model is required for delta inversion."
@@ -139,22 +139,19 @@ class VolSurface:
 
         fwd = fwd[inverse].reshape(delta_arr.shape)
 
-        strikes = np.empty_like(delta_arr)
         vols = np.empty_like(delta_arr)
         for index in np.ndindex(delta_arr.shape):
-            strikes[index], vols[index] = self._strike_and_vol_at_scalar_delta(
+            vols[index] = self._vol_at_scalar_delta(
                 delta=float(delta_arr[index]),
                 tau=float(tau_arr[index]),
                 fwd=float(fwd[index]),
                 sigma=float(sigma_arr[index]),
             )
-        if strikes.ndim == 0:
-            return float(strikes), float(vols)
+        if vols.ndim == 0:
+            return float(vols)
         return vols
 
-    def _strike_and_vol_at_scalar_delta(
-        self, delta: float, tau: float, fwd: float, sigma: float
-    ) -> tuple[float, float]:
+    def _vol_at_scalar_delta(self, delta: float, tau: float, fwd: float, sigma: float) -> float:
         """Bracket and solve one delta in log-forward moneyness."""
         sqrt_tau = np.sqrt(tau)
         z = ndtri(delta)
@@ -198,7 +195,7 @@ class VolSurface:
         if not np.isfinite(actual_delta) or abs(actual_delta - delta) > 1e-10:
             msg = f"Delta inversion did not reach the requested accuracy for delta={delta}, tau={tau}."
             raise ValueError(msg)
-        return strike, vol
+        return vol
 
     def _vol_at_scalar_maturity(self, k: np.ndarray, t: float) -> np.ndarray:
         """Helper: interpolate/extrapolate vols for scalar maturity t."""
