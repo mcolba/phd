@@ -1,8 +1,13 @@
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
+from functools import cache
 
 import numpy as np
+from numpy.typing import ArrayLike
+from scipy.optimize import brentq
+from scipy.special import ndtri
 
+from vol_risk.models.black76 import black76_undisc_fwd_delta
 from vol_risk.models.linear import LinearEquityMarket
 
 
@@ -81,8 +86,7 @@ class VolSurface:
     def vol(self, k: np.ndarray, t: np.ndarray) -> np.ndarray:
         """Evaluate the surface at strikes and maturities.
 
-        If t is between existing slices, interpolate in total variance.
-        Otherwise, use flat extrapolation in maturity.
+        If t is between existing slices, interpolate in total variance. Otherwise, use flat extrapolation in maturity.
         """
         k_arr = np.asarray(k, dtype=float)
         t_arr = np.asarray(t, dtype=float)
@@ -91,7 +95,6 @@ class VolSurface:
         if t_arr.ndim == 0:
             return self._vol_at_scalar_maturity(k_arr, float(t_arr))
 
-        # Array maturity: require same shape as strikes and interpolate per point.
         if k_arr.shape != t_arr.shape:
             msg = "Shapes of k and t must match when both are arrays."
             raise ValueError(msg)
@@ -106,6 +109,96 @@ class VolSurface:
         """Returns the at-the-money forward vol for given maturities."""
         k = self._linear_model.fwd(t)
         return self.vol(k, t)
+
+    def vol_at_delta(self, delta: ArrayLike, tau: ArrayLike) -> tuple[float | np.ndarray, float | np.ndarray]:
+        """Find strikes whose own surface IV gives the requested Black delta."""
+        if self._linear_model is None:
+            msg = "linear_model is required for delta inversion."
+            raise ValueError(msg)
+        delta_arr, tau_arr = np.broadcast_arrays(
+            np.asarray(delta, dtype=float),
+            np.asarray(tau, dtype=float),
+        )
+        if np.any(~np.isfinite(delta_arr) | (delta_arr <= 0.0) | (delta_arr >= 1.0)):
+            msg = "delta must be finite and strictly between zero and one (forward call delta)."
+            raise ValueError(msg)
+        if np.any(~np.isfinite(tau_arr) | (tau_arr <= 0.0)):
+            msg = "tau must be finite and positive."
+            raise ValueError(msg)
+
+        unique_tau, inverse = np.unique(tau_arr.ravel(), return_inverse=True)
+        sigma_arr = np.asarray(self.atmf_vol(unique_tau))[inverse].reshape(delta_arr.shape)
+        fwd = np.asarray(self._linear_model.fwd(unique_tau), dtype=float)
+
+        if np.any(~np.isfinite(fwd) | (fwd <= 0.0)):
+            msg = "Forward prices must be finite and positive for delta inversion."
+            raise ValueError(msg)
+        if np.any(~np.isfinite(sigma_arr) | (sigma_arr <= 0.0)):
+            msg = "The IV starting guess must be finite and positive."
+            raise ValueError(msg)
+
+        fwd = fwd[inverse].reshape(delta_arr.shape)
+
+        strikes = np.empty_like(delta_arr)
+        vols = np.empty_like(delta_arr)
+        for index in np.ndindex(delta_arr.shape):
+            strikes[index], vols[index] = self._strike_and_vol_at_scalar_delta(
+                delta=float(delta_arr[index]),
+                tau=float(tau_arr[index]),
+                fwd=float(fwd[index]),
+                sigma=float(sigma_arr[index]),
+            )
+        if strikes.ndim == 0:
+            return float(strikes), float(vols)
+        return vols
+
+    def _strike_and_vol_at_scalar_delta(
+        self, delta: float, tau: float, fwd: float, sigma: float
+    ) -> tuple[float, float]:
+        """Bracket and solve one delta in log-forward moneyness."""
+        sqrt_tau = np.sqrt(tau)
+        z = ndtri(delta)
+        total_vol = sigma * sqrt_tau
+        guess = float((0.5 * total_vol - z) * total_vol)
+
+        @cache
+        def evaluate(x: float) -> tuple[float, float]:
+            with np.errstate(over="ignore", under="ignore"):
+                strike = fwd * np.exp(x)
+            if not np.isfinite(strike) or strike <= 0.0:
+                msg = "Delta inversion exceeded the finite positive strike range."
+                raise ValueError(msg)
+            vol = float(self._vol_at_scalar_maturity(np.asarray([strike]), tau)[0])
+            s = vol * sqrt_tau
+            if not np.isfinite(s) or s <= 0.0:
+                msg = f"Surface IV must be finite and positive at strike={strike}, tau={tau}."
+                raise ValueError(msg)
+            # Solve z - d1 = 0 without evaluating the normal CDF on every step.
+            return float(z + x / s - 0.5 * s), vol
+
+        root = guess
+        f_guess = evaluate(guess)[0]
+        if abs(f_guess) > 1e-12:
+            width = max(0.5 * total_vol, 1e-4)
+            direction = -1.0 if f_guess > 0.0 else 1.0
+            for _ in range(32):
+                bound = guess + direction * width
+                f_bound = evaluate(bound)[0]
+                if f_bound == 0.0 or np.signbit(f_guess) != np.signbit(f_bound):
+                    break
+                width *= 2.0
+            else:
+                msg = f"Could not bracket a strike for delta={delta}, tau={tau}."
+                raise ValueError(msg)
+            lower, upper = sorted((guess, bound))
+            root = brentq(lambda x: evaluate(x)[0], lower, upper, xtol=1e-12 * min(total_vol, 1.0), rtol=1e-12)
+
+        strike, vol = float(fwd * np.exp(root)), evaluate(root)[1]
+        actual_delta = float(np.asarray(black76_undisc_fwd_delta(fwd, strike, tau, vol, is_call=True)).item())
+        if not np.isfinite(actual_delta) or abs(actual_delta - delta) > 1e-10:
+            msg = f"Delta inversion did not reach the requested accuracy for delta={delta}, tau={tau}."
+            raise ValueError(msg)
+        return strike, vol
 
     def _vol_at_scalar_maturity(self, k: np.ndarray, t: float) -> np.ndarray:
         """Helper: interpolate/extrapolate vols for scalar maturity t."""
