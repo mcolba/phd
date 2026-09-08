@@ -7,7 +7,6 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from numpy.typing import ArrayLike
-from scipy.interpolate import interp1d
 from sklearn.linear_model import LinearRegression
 
 from vol_risk.market_data.opt_chain import OptionChain
@@ -81,6 +80,9 @@ def make_raw_interpolator(
     if tau.size != r.size:
         msg = "tau and r must have the same length."
         raise ValueError(msg)
+    if tau.size == 0:
+        msg = "tau and r must not be empty."
+        raise ValueError(msg)
     if np.any(np.diff(tau) <= 0):
         msg = "tau must be strictly increasing."
         raise ValueError(msg)
@@ -97,21 +99,14 @@ def make_raw_interpolator(
         tau = np.insert(arr=tau, obj=0, values=0.0)
         rt = np.insert(arr=rt, obj=0, values=0.0)
 
-    interp_rt = interp1d(
-        x=tau,
-        y=rt,
-        kind="linear",
-        fill_value=(rt[0], rt[-1]),
-        assume_sorted=True,
-        bounds_error=False,
-    )
+    interp_tau = tau.copy()
 
     def _zc(x: ArrayLike) -> np.ndarray | float:
         if flat_extrap:
             x = np.clip(x, tau[0], tau[-1])
 
         x = np.asarray(x, dtype=float)
-        y = interp_rt(x) / x
+        y = np.interp(x, interp_tau, rt) / x
         return float(y) if np.ndim(x) == 0 else y
 
     return _zc
