@@ -21,6 +21,7 @@ applyTo: "**/*.py"
 
 ## Naming Conventions
 
+### Paramters
 - Use `spot` for thte spot price.
 - Use `fwd` for the forward price.
 - Use `strike` for the strike price.
@@ -31,3 +32,6 @@ applyTo: "**/*.py"
 - Use `disc` for the discount factor.
 - Use `sigma` for the volatility parameter.
 - Use `mu` for the drift parameter.
+
+### Object instances
+- Use `lin_mkt` for the linear market instances. 
