@@ -24,7 +24,6 @@ RUN_ID = "main"
 OVERWRITE_EXISTING = True
 FILE_LOG_LEVEL = logging.WARNING
 STREAM_LOG_LEVEL = logging.WARNING
-LOG_FILE_NAME = f"{Path(__file__).stem}_{TICKER}_{RUN_ID}.log"
 CALIB_CONFIG = LinearModelCalibConfig()
 
 log = logging.getLogger(__name__)
@@ -57,7 +56,7 @@ def _partition_dates(dataset: ds.Dataset) -> list[str]:
 def main() -> None:
     """Calibrate every available date and persist parameters and statistics."""
     configure_calibration_logging(
-        log_file_name=LOG_FILE_NAME,
+        log_file_name=f"{Path(__file__).stem}_{TICKER}_{RUN_ID}.log",
         file_level=FILE_LOG_LEVEL,
         stream_level=STREAM_LOG_LEVEL,
     )
