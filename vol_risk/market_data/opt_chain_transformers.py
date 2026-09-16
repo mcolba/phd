@@ -363,13 +363,11 @@ def _filter_informative_values(
         )
         if nearest_distance < min_distance:
             active[i] = False
-            if left_idx != -1:
-                next_idx[left_idx] = right_idx
-            if right_idx != -1:
-                prev_idx[right_idx] = left_idx
+            next_idx[left_idx] = right_idx
+            prev_idx[right_idx] = left_idx
 
     if max_distance is not None:
-        for i in np.argsort(-priority):
+        for i in np.argsort(priority):
             if not active[i]:
                 continue
 
@@ -379,16 +377,11 @@ def _filter_informative_values(
             if left_idx == -1 or right_idx == -1:
                 continue
 
-            furthest_distance = max(
-                np.log(values[i] / values[left_idx]),
-                np.log(values[right_idx] / values[i]),
-            )
-            if furthest_distance < max_distance:
+            tot_distance = np.log(values[i] / values[left_idx]) + np.log(values[right_idx] / values[i])
+            if tot_distance <= max_distance:
                 active[i] = False
-                if left_idx != -1:
-                    next_idx[left_idx] = right_idx
-                if right_idx != -1:
-                    prev_idx[right_idx] = left_idx
+                next_idx[left_idx] = right_idx
+                prev_idx[right_idx] = left_idx
 
     return active
 
