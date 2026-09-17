@@ -4,7 +4,7 @@ import datetime as dt
 from abc import ABC
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, TypeVar, runtime_checkable
 
 import jax.numpy as jnp
 import numpy as np
@@ -32,6 +32,7 @@ class Interpolator(Protocol):
 
 Curve = tuple[Array, Interpolator]
 
+
 @runtime_checkable
 class DayCountCalendar(Protocol):
     """Protocol for computing year-fraction between two dates."""
@@ -44,7 +45,7 @@ class DayCountCalendar(Protocol):
 class OptionChainLike(Protocol):
     """Read-only option chain interface.
 
-    This matches the current `vol_risk.data.option_chain.OptionChain` API while
+    This matches the current `vol_risk.market_data.opt_chain.OptionChain` API while
     allowing alternative backends (Arrow/JAX/etc.) to implement the same shape.
     """
 
@@ -334,6 +335,66 @@ class Calibrate(Protocol):
         settings: CalibrationSettings,
         kwargs=None,
     ) -> CalibrationResult: ...
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Persistence protocols
+# ---------------------------------------------------------------------------------------------------------------------
+
+CalibrationDate = dt.date | dt.datetime | str
+
+ParamsT = TypeVar("ParamsT")
+ArtifactT = TypeVar("ArtifactT")
+
+
+@runtime_checkable
+class CalibrationArtifactStore(Protocol[ParamsT, ArtifactT]):
+    """Persistence contract for per-date model calibration artifacts.
+
+    Implementations bind a database connection and read or write one model's
+    calibrated parameters, statistics, and immutable specification. Transactions
+    are caller-managed.
+    """
+
+    def initialize(self) -> None:
+        """Create the backing calibration tables if they do not exist."""
+        ...
+
+    def contains(self, ticker: str, calibration_date: CalibrationDate, calibration_id: str) -> bool:
+        """Return whether the requested artifact exists."""
+        ...
+
+    def write(
+        self,
+        *,
+        ticker: str,
+        calibration_date: CalibrationDate,
+        calibration_id: str,
+        algorithm_version: str,
+        params: ParamsT,
+        stats: Mapping[object, object] | None,
+        config: Mapping[str, object],
+    ) -> None:
+        """Persist one new observation and its calibration specification."""
+        ...
+
+    def overwrite(
+        self,
+        *,
+        ticker: str,
+        calibration_date: CalibrationDate,
+        calibration_id: str,
+        algorithm_version: str,
+        params: ParamsT,
+        stats: Mapping[object, object] | None,
+        config: Mapping[str, object],
+    ) -> None:
+        """Replace one observation after verifying its calibration specification."""
+        ...
+
+    def load(self, ticker: str, calibration_date: CalibrationDate, calibration_id: str) -> ArtifactT:
+        """Retrieve one artifact for use."""
+        ...
 
 
 # ---------------------------------------------------------------------------------------------------------------------

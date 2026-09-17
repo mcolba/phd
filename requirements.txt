@@ -1,11 +1,14 @@
 arbitragerepair>=1.1.0
 jax>=0.8.0
 jaxopt>=0.8.3
+joblib>=1.5.2
 matplotlib>=3.10.7
 numpy>=2.3.4
 pandas>=2.3.3
 pandera>=0.26.1
 scipy>=1.15.3
+statsmodels>=0.14.6
 pyarrow>=23.0.1
+PyYAML>=6.0.3
 tqdm>=4.67.3
 .\third_party\jaeckel

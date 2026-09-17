@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from vol_risk.market_data.opt_chain import OptionChain
 
 log = logging.getLogger(__name__)
+LINEAR_EQUITY_ALGORITHM_VERSION = "linear-equity.v1"
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,7 @@ class LinearModelCalibResult:
     params: LinearEquityParams
     stats: dict[object, object]
     chain: OptionChain
+    algorithm_version: str
 
 
 def run_linear_model_pipeline(
@@ -74,4 +76,5 @@ def run_linear_model_pipeline(
         params=params,
         stats=stats,
         chain=calibration_chain,
+        algorithm_version=LINEAR_EQUITY_ALGORITHM_VERSION,
     )

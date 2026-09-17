@@ -1,6 +1,6 @@
 import logging
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import InitVar, dataclass
 from itertools import product
 from typing import Any
 
@@ -24,6 +24,39 @@ class LinearEquityParams:
     tau: np.ndarray
     r: np.ndarray
     q: np.ndarray
+    validate: InitVar[bool] = False
+
+    def __post_init__(self, validate: bool) -> None:
+        """Validate and normalize parameters when requested."""
+        if not validate:
+            return
+
+        try:
+            spot = float(self.spot)
+            tau = np.asarray(self.tau, dtype=float)
+            r = np.asarray(self.r, dtype=float)
+            q = np.asarray(self.q, dtype=float)
+        except (TypeError, ValueError) as error:
+            msg = "Linear-equity parameters must be numeric"
+            raise ValueError(msg) from error
+
+        if not np.isfinite(spot) or spot <= 0.0:
+            msg = f"spot must be finite and positive; received {spot}"
+            raise ValueError(msg)
+        if tau.ndim != 1 or tau.size == 0 or r.shape != tau.shape or q.shape != tau.shape:
+            msg = "tau, rate, and dividend-yield arrays must be equally sized 1-D arrays"
+            raise ValueError(msg)
+        if not np.isfinite(np.concatenate((tau, r, q))).all():
+            msg = "Curve inputs must contain only finite values"
+            raise ValueError(msg)
+        if np.any(tau <= 0.0) or np.any(np.diff(tau) <= 0.0):
+            msg = "Maturities must be positive and strictly increasing"
+            raise ValueError(msg)
+
+        object.__setattr__(self, "spot", spot)
+        object.__setattr__(self, "tau", tau)
+        object.__setattr__(self, "r", r)
+        object.__setattr__(self, "q", q)
 
 
 @dataclass(frozen=True)

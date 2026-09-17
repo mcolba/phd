@@ -78,6 +78,20 @@ class LogNormMixParams(ModelParams):
         return np.log(self.fwd_scale) / tau
 
 
+@dataclass(frozen=True)
+class LogNormMixSurfaceParams:
+    """Per-maturity log-normal mixture parameters for one volatility surface."""
+
+    taus: np.ndarray
+    slices: tuple[LogNormMixParams, ...]
+
+    def __post_init__(self) -> None:
+        """Validates per-maturity slices."""
+        if len(self.taus) != len(self.slices):
+            msg = "Length of 'taus' must match length of 'slices'."
+            raise ValueError(msg)
+
+
 def _param_slices(n: int) -> tuple[slice, slice, slice]:
     """Return slices into stacked parameter vector [w | fwd_scale | sigma]."""
     return slice(0, n), slice(n, 2 * n), slice(2 * n, 3 * n)
@@ -1084,7 +1098,7 @@ def calib_mixture_ivs(
     lambda_tm1_params: tuple[float, float, float] = (0.0, 0.0, 0.0),
     calendar_arb_bounds: NoArbBounds | None = None,
     lambda_ca_bounds: float = 0.0,
-) -> tuple[VolSurface, dict, dict]:
+) -> tuple[VolSurface, LogNormMixSurfaceParams, dict]:
     """Calibrate a log-normal mixture model to each expiry slice.
 
     Args:
@@ -1101,7 +1115,7 @@ def calib_mixture_ivs(
         lambda_ca_bounds: Calendar-arb penalty weight.
 
     Returns:
-        Tuple of (VolSurface, params dict, stats dict).
+        Tuple of (VolSurface, surface parameters, stats dict).
     """
     _require_call_only(opt)
 
@@ -1111,7 +1125,7 @@ def calib_mixture_ivs(
 
     taus = []
     smiles = []
-    params = {}
+    params = []
 
     stats = {"_contracts": []}
 
@@ -1245,10 +1259,7 @@ def calib_mixture_ivs(
         smiles.append(_make_smile_fun(fitted, mkt, tau))
         stats_t["bounds_df"] = None if bounds_df is None else bounds_df.copy()
         stats[t] = stats_t
-        params[t] = {
-            "tau": tau,
-            "params": fitted,
-        }
+        params.append(fitted)
 
         # Update results
         prev_params = fitted
@@ -1313,7 +1324,11 @@ def calib_mixture_ivs(
         msg = f"{stats['num_out_of_2x_bid_ask']} model price(s) is outside 2x bid-ask spread(s)."
         log.info(msg)
 
-    return VolSurface(np.array(taus, dtype=float), smiles, mkt), params, stats
+    surface_params = LogNormMixSurfaceParams(
+        taus=np.asarray(taus, dtype=float),
+        slices=tuple(params),
+    )
+    return VolSurface(np.array(taus, dtype=float), smiles, mkt), surface_params, stats
 
 
 def gaussian_pdf(x: ArrayLike, mu: ArrayLike, sigma: ArrayLike) -> np.ndarray:

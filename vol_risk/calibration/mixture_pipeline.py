@@ -29,13 +29,17 @@ from vol_risk.market_data.opt_chain_transformers import (
 )
 from vol_risk.models.black76 import black76_price
 from vol_risk.models.linear import LinearEquityMarket, LinearEquityParams, calib_linear_equity_market
-from vol_risk.vol_surface.interpl.mixture import LogNormMixParams, VolSurface, calib_mixture_ivs
-from vol_risk.vol_surface.moneyness import MONEYNESS_REGISTRY
+from vol_risk.vol_surface.interpl.mixture import (
+    LogNormMixSurfaceParams,
+    VolSurface,
+    calib_mixture_ivs,
+)
 
 if TYPE_CHECKING:
     from vol_risk.market_data.opt_chain import OptionChain
 
 log = logging.getLogger(__name__)
+LOGNORMAL_MIXTURE_ALGORITHM_VERSION = "lognormal-mixture.v1"
 
 _CALENDAR_ARB_LKF_GRID = np.linspace(-0.5, 0.5, 25, dtype=float)
 _CALENDAR_ARB_TAU_GRID = np.array([1, 2, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36]) * 30.0 / 365.0
@@ -179,10 +183,11 @@ class MixtureCalibResult:
 
     lin_mkt: LinearEquityMarket
     surface: VolSurface
-    params: tuple[LinearEquityParams, list[LogNormMixParams]]
+    params: tuple[LinearEquityParams, LogNormMixSurfaceParams]
     stats: tuple[dict, dict]
     chains: tuple[OptionChain, OptionChain]
     return_code: int
+    algorithm_version: str
     warnings: tuple[str, ...] = field(default_factory=tuple)
 
 
@@ -326,7 +331,7 @@ def run_mixture_pipeline(
 
         elapsed = time.time() - start_time
         msg = (
-            f"Calibration complete. Expiries calibrated: {len(ivs_params)}, "
+            f"Calibration complete. Expiries calibrated: {len(ivs_params.slices)}, "
             f"MAE: {ivs_stats['iv_mae_approx']:.4f}, "
             f"return code: {int(return_code)}, "
             f"elapsed time: {elapsed:.2f} seconds."
@@ -341,6 +346,7 @@ def run_mixture_pipeline(
             chains=(chain_lm, chain_vol),
             warnings=tuple(warning_handler.messages),
             return_code=int(return_code),
+            algorithm_version=LOGNORMAL_MIXTURE_ALGORITHM_VERSION,
         )
     finally:
         package_logger.removeHandler(warning_handler)
