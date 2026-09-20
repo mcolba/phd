@@ -89,6 +89,7 @@ def main() -> None:
                             ticker=TICKER,
                             calibration_date=calibration_date,
                             calibration_id=CALIBRATION_ID,
+                            model_id=result.model_id,
                             algorithm_version=result.algorithm_version,
                             params=result.params,
                             stats=result.stats,

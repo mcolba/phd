@@ -16,10 +16,11 @@ DATABASE_PATH = _PROJECT_ROOT / "data" / "derived" / "market_data.sqlite"
 CREATE_CALIBRATION_SPECS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS calibration_specs (
     calibration_id TEXT NOT NULL CHECK (length(trim(calibration_id)) > 0),
-    model TEXT NOT NULL CHECK (length(trim(model)) > 0),
+    model_id TEXT NOT NULL CHECK (length(trim(model_id)) > 0),
     algorithm_version TEXT NOT NULL CHECK (length(trim(algorithm_version)) > 0),
     config TEXT NOT NULL CHECK (json_valid(config)),
-    PRIMARY KEY (calibration_id)
+    PRIMARY KEY (calibration_id),
+    UNIQUE (model_id, algorithm_version, config)
 ) WITHOUT ROWID
 """
 

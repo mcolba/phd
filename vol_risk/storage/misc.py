@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import date, datetime
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    import sqlite3
 
 
 def normalize_identifier(value: str, name: str) -> str:
@@ -35,31 +32,35 @@ def register_calib_spec(
     connection: sqlite3.Connection,
     *,
     calibration_id: str,
-    model: str,
+    model_id: str,
     algorithm_version: str,
     config_json: str,
 ) -> None:
     """Create a calibration specification or verify the existing immutable metadata."""
     row = connection.execute(
         """
-        SELECT model, algorithm_version, config
+        SELECT model_id, algorithm_version, config
         FROM calibration_specs
         WHERE calibration_id = ?
         """,
         (calibration_id,),
     ).fetchone()
     if row is None:
-        connection.execute(
-            """
-            INSERT INTO calibration_specs (
-                calibration_id, model, algorithm_version, config
-            ) VALUES (?, ?, ?, ?)
-            """,
-            (calibration_id, model, algorithm_version, config_json),
-        )
+        try:
+            connection.execute(
+                """
+                INSERT INTO calibration_specs (
+                    calibration_id, model_id, algorithm_version, config
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (calibration_id, model_id, algorithm_version, config_json),
+            )
+        except sqlite3.IntegrityError as error:
+            msg = "Calibration specification metadata already exists"
+            raise ValueError(msg) from error
         return
 
-    stored_model, stored_algorithm_version, stored_config = row
-    if stored_model != model or stored_algorithm_version != algorithm_version or stored_config != config_json:
+    stored_model_id, stored_algorithm_version, stored_config = row
+    if stored_model_id != model_id or stored_algorithm_version != algorithm_version or stored_config != config_json:
         msg = f"Calibration specification {calibration_id!r} has different metadata"
         raise ValueError(msg)

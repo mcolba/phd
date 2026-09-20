@@ -32,7 +32,6 @@ if TYPE_CHECKING:
 
     from vol_risk.models.linear import LinearEquityMarket
 
-MODEL_NAME = "lognormal_mixture"
 _PARAMS_MAGIC = b"vol-risk.mixture-params.numpy.v1\0"
 
 
@@ -43,6 +42,7 @@ class VolMarketArtifact:
     ticker: str
     calibration_date: date
     calibration_id: str
+    model_id: str
     algorithm_version: str
     params: LogNormMixSurfaceParams
     stats: dict[object, object] | None
@@ -149,6 +149,7 @@ class VolMarketStore(CalibrationArtifactStore[LogNormMixSurfaceParams, VolMarket
         ticker: str,
         calibration_date: date | datetime | str,
         calibration_id: str,
+        model_id: str,
         algorithm_version: str,
         params: LogNormMixSurfaceParams,
         stats: Mapping[object, object] | None,
@@ -159,6 +160,7 @@ class VolMarketStore(CalibrationArtifactStore[LogNormMixSurfaceParams, VolMarket
             ticker=ticker,
             calibration_date=calibration_date,
             calibration_id=calibration_id,
+            model_id=model_id,
             algorithm_version=algorithm_version,
             params=params,
             stats=stats,
@@ -172,6 +174,7 @@ class VolMarketStore(CalibrationArtifactStore[LogNormMixSurfaceParams, VolMarket
         ticker: str,
         calibration_date: date | datetime | str,
         calibration_id: str,
+        model_id: str,
         algorithm_version: str,
         params: LogNormMixSurfaceParams,
         stats: Mapping[object, object] | None,
@@ -182,6 +185,7 @@ class VolMarketStore(CalibrationArtifactStore[LogNormMixSurfaceParams, VolMarket
             ticker=ticker,
             calibration_date=calibration_date,
             calibration_id=calibration_id,
+            model_id=model_id,
             algorithm_version=algorithm_version,
             params=params,
             stats=stats,
@@ -195,6 +199,7 @@ class VolMarketStore(CalibrationArtifactStore[LogNormMixSurfaceParams, VolMarket
         ticker: str,
         calibration_date: date | datetime | str,
         calibration_id: str,
+        model_id: str,
         algorithm_version: str,
         params: LogNormMixSurfaceParams,
         stats: Mapping[object, object] | None,
@@ -204,6 +209,7 @@ class VolMarketStore(CalibrationArtifactStore[LogNormMixSurfaceParams, VolMarket
         """Write an observation while maintaining specification consistency."""
         ticker = normalize_identifier(ticker, "ticker")
         calibration_id = normalize_identifier(calibration_id, "calibration_id")
+        model_id = normalize_identifier(model_id, "model_id")
         algorithm_version = normalize_identifier(algorithm_version, "algorithm_version")
         date_text = normalize_date(calibration_date).isoformat()
         if not isinstance(params, LogNormMixSurfaceParams):
@@ -230,7 +236,7 @@ class VolMarketStore(CalibrationArtifactStore[LogNormMixSurfaceParams, VolMarket
             register_calib_spec(
                 self.connection,
                 calibration_id=calibration_id,
-                model=MODEL_NAME,
+                model_id=model_id,
                 algorithm_version=algorithm_version,
                 config_json=config_json,
             )
@@ -275,9 +281,9 @@ class VolMarketStore(CalibrationArtifactStore[LogNormMixSurfaceParams, VolMarket
         normalized_date = normalize_date(calibration_date)
         row = self.connection.execute(
             """
-            SELECT calibration_specs.model, vol_market.params, vol_market.stats,
-                   calibration_specs.config,
-                   calibration_specs.algorithm_version, vol_market.update_time
+            SELECT calibration_specs.model_id, vol_market.params, vol_market.stats,
+                   calibration_specs.config, calibration_specs.algorithm_version,
+                   vol_market.update_time
             FROM vol_market
             JOIN calibration_specs USING (calibration_id)
             WHERE vol_market.ticker = ?
@@ -293,10 +299,7 @@ class VolMarketStore(CalibrationArtifactStore[LogNormMixSurfaceParams, VolMarket
             )
             raise KeyError(msg)
 
-        stored_model, params_blob, stats_blob, config_json, algorithm_version, update_time = row
-        if stored_model != MODEL_NAME:
-            msg = f"Stored calibration specification {calibration_id!r} is not a log-normal mixture model"
-            raise ValueError(msg)
+        stored_model_id, params_blob, stats_blob, config_json, algorithm_version, update_time = row
 
         params = _decode_params(bytes(params_blob))
         raw_stats = None if stats_blob is None else unpickle_bytes(bytes(stats_blob), "vol-market statistics")
@@ -314,6 +317,7 @@ class VolMarketStore(CalibrationArtifactStore[LogNormMixSurfaceParams, VolMarket
             ticker=ticker,
             calibration_date=normalized_date,
             calibration_id=calibration_id,
+            model_id=stored_model_id,
             algorithm_version=algorithm_version,
             params=params,
             stats=stats,

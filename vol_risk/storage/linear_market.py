@@ -34,7 +34,6 @@ from vol_risk.storage.sqlite import initialize_schema
 if TYPE_CHECKING:
     from datetime import date, datetime
 
-MODEL_NAME = "linear_equity"
 _PARAMS_MAGIC = b"vol-risk.linear-params.numpy.v1\0"
 
 
@@ -45,6 +44,7 @@ class LinearModelArtifact:
     ticker: str
     calibration_date: date
     calibration_id: str
+    model_id: str
     algorithm_version: str
     model: LinearEquityMarket
     params: LinearEquityParams
@@ -137,6 +137,7 @@ class LinearModelStore(CalibrationArtifactStore[LinearEquityParams, LinearModelA
         ticker: str,
         calibration_date: date | datetime | str,
         calibration_id: str,
+        model_id: str,
         algorithm_version: str,
         params: LinearEquityParams,
         stats: Mapping[object, object] | None,
@@ -147,6 +148,7 @@ class LinearModelStore(CalibrationArtifactStore[LinearEquityParams, LinearModelA
             ticker=ticker,
             calibration_date=calibration_date,
             calibration_id=calibration_id,
+            model_id=model_id,
             algorithm_version=algorithm_version,
             params=params,
             stats=stats,
@@ -160,6 +162,7 @@ class LinearModelStore(CalibrationArtifactStore[LinearEquityParams, LinearModelA
         ticker: str,
         calibration_date: date | datetime | str,
         calibration_id: str,
+        model_id: str,
         algorithm_version: str,
         params: LinearEquityParams,
         stats: Mapping[object, object] | None,
@@ -170,6 +173,7 @@ class LinearModelStore(CalibrationArtifactStore[LinearEquityParams, LinearModelA
             ticker=ticker,
             calibration_date=calibration_date,
             calibration_id=calibration_id,
+            model_id=model_id,
             algorithm_version=algorithm_version,
             params=params,
             stats=stats,
@@ -183,6 +187,7 @@ class LinearModelStore(CalibrationArtifactStore[LinearEquityParams, LinearModelA
         ticker: str,
         calibration_date: date | datetime | str,
         calibration_id: str,
+        model_id: str,
         algorithm_version: str,
         params: LinearEquityParams,
         stats: Mapping[object, object] | None,
@@ -192,6 +197,7 @@ class LinearModelStore(CalibrationArtifactStore[LinearEquityParams, LinearModelA
         """Write an observation while maintaining specification consistency."""
         ticker = normalize_identifier(ticker, "ticker")
         calibration_id = normalize_identifier(calibration_id, "calibration_id")
+        model_id = normalize_identifier(model_id, "model_id")
         algorithm_version = normalize_identifier(algorithm_version, "algorithm_version")
         date_text = normalize_date(calibration_date).isoformat()
         if not isinstance(params, LinearEquityParams):
@@ -218,7 +224,7 @@ class LinearModelStore(CalibrationArtifactStore[LinearEquityParams, LinearModelA
             register_calib_spec(
                 self.connection,
                 calibration_id=calibration_id,
-                model=MODEL_NAME,
+                model_id=model_id,
                 algorithm_version=algorithm_version,
                 config_json=config_json,
             )
@@ -263,9 +269,9 @@ class LinearModelStore(CalibrationArtifactStore[LinearEquityParams, LinearModelA
         normalized_date = normalize_date(calibration_date)
         row = self.connection.execute(
             """
-            SELECT calibration_specs.model, linear_market.params, linear_market.stats,
-                   calibration_specs.config,
-                   calibration_specs.algorithm_version, linear_market.update_time
+            SELECT calibration_specs.model_id, linear_market.params, linear_market.stats,
+                   calibration_specs.config, calibration_specs.algorithm_version,
+                   linear_market.update_time
             FROM linear_market
             JOIN calibration_specs USING (calibration_id)
             WHERE linear_market.ticker = ?
@@ -281,10 +287,7 @@ class LinearModelStore(CalibrationArtifactStore[LinearEquityParams, LinearModelA
             )
             raise KeyError(msg)
 
-        stored_model, params_blob, stats_blob, config_json, algorithm_version, update_time = row
-        if stored_model != MODEL_NAME:
-            msg = f"Stored calibration specification {calibration_id!r} is not a linear-equity model"
-            raise ValueError(msg)
+        stored_model_id, params_blob, stats_blob, config_json, algorithm_version, update_time = row
 
         params = _decode_params(bytes(params_blob))
         raw_stats = None if stats_blob is None else unpickle_bytes(bytes(stats_blob), "linear-model statistics")
@@ -302,6 +305,7 @@ class LinearModelStore(CalibrationArtifactStore[LinearEquityParams, LinearModelA
             ticker=ticker,
             calibration_date=normalized_date,
             calibration_id=calibration_id,
+            model_id=stored_model_id,
             algorithm_version=algorithm_version,
             model=_model_from_params(params),
             params=params,
