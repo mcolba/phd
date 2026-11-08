@@ -91,11 +91,3 @@ def make_bs_control(
         cf=make_bs_cf(spot, r, q, tau, sigma, xp=xp),
         call_price=call_price,
     )
-
-
-__all__ = [
-    "make_bs_call_price_jax",
-    "make_bs_call_price_np",
-    "make_bs_cf",
-    "make_bs_control",
-]

@@ -307,15 +307,3 @@ def vgsi_price_jax(
     call_mask = jnp.asarray(is_call, dtype=bool)
     put_price = call_price - spot_a * jnp.exp(-q_a * tau_a) + strike_a * jnp.exp(-r_a * tau_a)
     return jnp.where(call_mask, call_price, put_price)
-
-
-__all__ = [
-    "ControlName",
-    "VGSIJaxParams",
-    "_vg_compensator",
-    "_vgsi_compensator",
-    "make_vgsi_cf",
-    "vgsi_cf",
-    "vgsi_price_jax",
-    "warn_vgsi_fft_moment_condition",
-]
