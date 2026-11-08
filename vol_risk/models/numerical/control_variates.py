@@ -2,9 +2,9 @@
 
 Implements the Joshi & Yang (2011) Black-Scholes control variate: subtract the
 BS characteristic function from a model CF inside the Carr-Madan Fourier
-integral and add the closed-form BS call price back at the end. With a
-variance-matched BS volatility the difference CF decays two orders faster
-than the bare model CF (Joshi & Yang 2011, Thm 3.1).
+integral and add the closed-form BS call price back at the end. The caller
+supplies the control volatility, for example by matching characteristic
+functions on the integration contour (Joshi & Yang 2011, section 3.3).
 """
 
 from __future__ import annotations

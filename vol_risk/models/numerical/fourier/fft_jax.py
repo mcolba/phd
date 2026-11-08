@@ -23,9 +23,7 @@ logger = logging.getLogger(__name__)
 @lru_cache(maxsize=1)
 def _log_x64_disabled_warning() -> None:
     """Log the reduced-precision warning at most once per process."""
-    msg = (
-        "JAX x64 is disabled; the JAX FFT engine will use reduced precision."
-    )
+    msg = "JAX x64 is disabled; the JAX FFT engine will use reduced precision."
     logger.warning(msg)
 
 
@@ -193,7 +191,13 @@ def fft_call_price_on_grid(
     call_price = jnp.interp(strike_arr, grid.strike, call_grid)
 
     if control is not None:
-        call_price = call_price + control.call_price(strike_arr)
+        upper = jnp.clip(jnp.searchsorted(grid.strike, strike_arr, side="right"), 1, grid.grid_size - 1)
+        lower_strike, upper_strike = grid.strike[upper - 1], grid.strike[upper]
+        weight = jnp.clip((strike_arr - lower_strike) / (upper_strike - lower_strike), 0.0, 1.0)
+        lower_control = control.call_price(lower_strike)
+        upper_control = control.call_price(upper_strike)
+        # Match the residual's interpolation to avoid subtracting Black convexity error.
+        call_price = call_price + (lower_control + weight * (upper_control - lower_control))
 
     return call_price
 
@@ -215,9 +219,7 @@ class JaxFFTCallEngine:
     grid: JaxFFTCallGrid | None = None
 
     def __call__(self, strike: ArrayLike) -> jax.Array:
-        grid = self.grid if self.grid is not None else make_jax_fft_call_grid(
-            strike=strike, params=self.params
-        )
+        grid = self.grid if self.grid is not None else make_jax_fft_call_grid(strike=strike, params=self.params)
         return _fft_call_price_from_cf(
             cf=self.cf,
             strike=strike,

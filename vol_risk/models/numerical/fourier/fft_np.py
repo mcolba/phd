@@ -172,7 +172,13 @@ def _fft_call_price_from_cf(
     call_price = np.interp(strike_1d, grid.strike, call_grid)
 
     if control is not None:
-        call_price += np.asarray(control.call_price(strike_1d), dtype=float).reshape(strike_1d.shape)
+        upper = np.clip(np.searchsorted(grid.strike, strike_1d, side="right"), 1, grid.grid_size - 1)
+        lower_strike, upper_strike = grid.strike[upper - 1], grid.strike[upper]
+        weight = np.clip((strike_1d - lower_strike) / (upper_strike - lower_strike), 0.0, 1.0)
+        lower_control = np.asarray(control.call_price(lower_strike), dtype=float).reshape(strike_1d.shape)
+        upper_control = np.asarray(control.call_price(upper_strike), dtype=float).reshape(strike_1d.shape)
+        # Match the residual's interpolation to avoid subtracting Black convexity error.
+        call_price += lower_control + weight * (upper_control - lower_control)
 
     out = call_price.reshape(strike_arr.shape) if not scalar_input else call_price
     return float(out[0]) if scalar_input else out

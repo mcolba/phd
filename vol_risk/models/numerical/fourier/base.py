@@ -26,7 +26,11 @@ class CallControlVariate:
 
 @dataclass(frozen=True, slots=True)
 class QuadEngineParams:
-    """Parameters for finite-range Carr-Madan call quadrature."""
+    """Carr-Madan quadrature settings; ``upper_bound=np.inf`` integrates the full tail.
+
+    ``oscillation_shift`` removes a known linear CF phase for infinite-range
+    quadrature; ``None`` uses zero. Finite-range integration ignores this shift.
+    """
 
     damping: float = 0.03
     upper_bound: float = 512.0
@@ -35,13 +39,14 @@ class QuadEngineParams:
     epsabs: float = 1.0e-8
     epsrel: float = 1.0e-8
     limit: int = 200
+    oscillation_shift: float | None = None
 
     validate: InitVar[bool] = True
 
     def __post_init__(self, validate: bool) -> None:
         if validate:
             _validate_positive_finite("damping", self.damping)
-            _validate_positive_finite("upper_bound", self.upper_bound)
+            _validate_quad_bounds(self.upper_bound, self.oscillation_shift)
             breaks = None if self.breakpoints is None else tuple(float(x) for x in self.breakpoints)
             if breaks is not None:
                 if not breaks:
@@ -79,6 +84,15 @@ def _validate_positive_finite(name: str, value: float) -> None:
         raise ValueError(msg)
 
 
+def _validate_quad_bounds(upper_bound: float, oscillation_shift: float | None) -> None:
+    """Validate the integration range and optional linear phase shift."""
+    if upper_bound != np.inf:
+        _validate_positive_finite("upper_bound", upper_bound)
+    if oscillation_shift is not None and not np.isfinite(oscillation_shift):
+        msg = "oscillation_shift must be finite or None."
+        raise ValueError(msg)
+
+
 def _as_strike_array(strike: ArrayLike) -> tuple[FloatArray, FloatArray, bool]:
     strike_arr = np.asarray(strike, dtype=float)
     if np.any(~np.isfinite(strike_arr)) or np.any(strike_arr <= 0.0):
@@ -93,6 +107,26 @@ def _validate_disc(disc: float) -> float:
     return disc_value
 
 
+def _carr_madan_transform(
+    v: float,
+    log_strike: float,
+    disc: float,
+    damping: float,
+    cf: CharacteristicFunction,
+    control_cf: CharacteristicFunction | None,
+    oscillation_shift: float,
+) -> complex:
+    """Return the Carr-Madan transform with a specified linear phase removed."""
+    u = np.asarray([v - 1j * (damping + 1.0)], dtype=np.complex128)
+    phi = np.asarray(cf(u), dtype=np.complex128).reshape(-1)[0]
+    if control_cf is not None:
+        phi = phi - np.asarray(control_cf(u), dtype=np.complex128).reshape(-1)[0]
+
+    denominator = damping * damping + damping - v * v + 1j * (2.0 * damping + 1.0) * v
+    value = np.exp(-damping * log_strike - 1j * v * oscillation_shift) * disc * phi / denominator / np.pi
+    return complex(value)
+
+
 def _integrand(
     v: float,
     log_strike: float,
@@ -101,15 +135,60 @@ def _integrand(
     cf: CharacteristicFunction,
     control_cf: CharacteristicFunction | None,
 ) -> float:
-    """Integrand for the Carr-Madan quadrature."""
-    u = np.asarray([v - 1j * (damping + 1.0)], dtype=np.complex128)
-    phi = np.asarray(cf(u), dtype=np.complex128).reshape(-1)[0]
-    if control_cf is not None:
-        phi = phi - np.asarray(control_cf(u), dtype=np.complex128).reshape(-1)[0]
+    """Integrand for finite-range Carr-Madan quadrature."""
+    return _carr_madan_transform(v, log_strike, disc, damping, cf, control_cf, log_strike).real
 
-    denominator = damping * damping + damping - v * v + 1j * (2.0 * damping + 1.0) * v
-    value = np.exp(-damping * log_strike - 1j * v * log_strike) * disc * phi / denominator / np.pi
-    return float(np.real(value))
+
+def _infinite_call_integral(
+    log_strike: float,
+    disc: float,
+    damping: float,
+    cf: CharacteristicFunction,
+    control_cf: CharacteristicFunction | None,
+    oscillation_shift: float,
+    limit: int,
+    epsabs: float,
+    epsrel: float,
+) -> float:
+    """Integrate the full Fourier tail; return NaN when QUADPACK does not converge."""
+    frequency = log_strike - oscillation_shift
+    zero_tolerance = np.sqrt(np.finfo(float).eps) * max(1.0, abs(log_strike), abs(oscillation_shift))
+    if abs(frequency) <= zero_tolerance:
+        # Near-zero frequencies make the oscillatory integrator's cycle length unbounded.
+        result = quad(
+            _integrand,
+            0.0,
+            np.inf,
+            args=(log_strike, disc, damping, cf, control_cf),
+            epsabs=epsabs,
+            epsrel=epsrel,
+            limit=limit,
+            full_output=1,
+        )
+        return float(result[0]) if len(result) == 3 and np.isfinite(result[0]) else float("nan")
+
+    def component(v: float, imaginary: bool) -> float:
+        value = _carr_madan_transform(v, log_strike, disc, damping, cf, control_cf, oscillation_shift)
+        return value.imag if imaginary else value.real
+
+    integral = 0.0
+    for imaginary in (False, True):
+        result = quad(
+            component,
+            0.0,
+            np.inf,
+            args=(imaginary,),
+            weight="sin" if imaginary else "cos",
+            wvar=frequency,
+            epsabs=epsabs / 2.0,
+            limit=limit,
+            limlst=max(3, limit),
+            full_output=1,
+        )
+        if len(result) != 3 or not np.isfinite(result[0]):
+            return float("nan")
+        integral += float(result[0])
+    return integral
 
 
 def _quad_call_price_from_cf(
@@ -123,8 +202,9 @@ def _quad_call_price_from_cf(
     epsrel: float = 1.0e-8,
     upper_bound: float = 512.0,
     breakpoints: tuple[float, ...] | None = (8.0, 64.0),
+    oscillation_shift: float = 0.0,
 ) -> float | FloatArray:
-    """Return discounted European call prices by finite Carr-Madan quadrature."""
+    """Return discounted European call prices by Carr-Madan quadrature."""
     strike_arr, strike_1d, scalar_input = _as_strike_array(strike)
 
     disc_value = _validate_disc(disc)
@@ -133,6 +213,11 @@ def _quad_call_price_from_cf(
 
     prices = np.empty(strike_1d.shape, dtype=float)
     for idx, log_strike in enumerate(log_strikes):
+        if np.isposinf(upper_bound):
+            prices[idx] = _infinite_call_integral(
+                float(log_strike), disc_value, damping, cf, control_cf, oscillation_shift, limit, epsabs, epsrel
+            )
+            continue
         integral, _ = quad(
             _integrand,
             a=0.0,
@@ -160,7 +245,7 @@ def _quad_call_price_from_cf(
 
 @dataclass(frozen=True, slots=True)
 class QuadCallEngine:
-    """Finite-range Carr-Madan quadrature call engine."""
+    """Finite- or infinite-range Carr-Madan quadrature call engine."""
 
     cf: CharacteristicFunction
     disc: float
@@ -192,6 +277,7 @@ class QuadCallEngine:
             epsrel=self.params.epsrel,
             upper_bound=self.params.upper_bound,
             breakpoints=self.params.breakpoints,
+            oscillation_shift=0.0 if self.params.oscillation_shift is None else self.params.oscillation_shift,
         )
 
 

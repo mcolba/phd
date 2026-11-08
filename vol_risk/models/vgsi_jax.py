@@ -28,6 +28,7 @@ from vol_risk.models.numerical.fourier.fft_jax import (
     JaxFFTCallGrid,
     fft_call_price_on_grid,
 )
+from vol_risk.models.vg_control import vg_control_variance
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -193,14 +194,25 @@ def _control_sigma(
     index_params: VGSIJaxParams,
     factor_loading: jax.Array,
     residual_params: VGSIJaxParams,
+    *,
+    damping: float,
 ) -> jax.Array:
-    beta_sq = factor_loading * factor_loading
-    idx_var = index_params.sigma * index_params.sigma + index_params.theta * index_params.theta * index_params.nu
-    res_var = (
-        residual_params.sigma * residual_params.sigma
-        + residual_params.theta * residual_params.theta * residual_params.nu
+    """Match the Black control to the VGSI CF on the configured FFT contour."""
+    index_variance = vg_control_variance(
+        factor_loading * index_params.sigma,
+        index_params.nu,
+        factor_loading * index_params.theta,
+        damping,
+        xp=jnp,
     )
-    return jnp.sqrt(beta_sq * idx_var + res_var)
+    residual_variance = vg_control_variance(
+        residual_params.sigma,
+        residual_params.nu,
+        residual_params.theta,
+        damping,
+        xp=jnp,
+    )
+    return jnp.sqrt(index_variance + residual_variance)
 
 
 def _make_bs_control(
@@ -278,7 +290,7 @@ def vgsi_price_jax(
 
     cv: JaxControlVariate | None = None
     if control == "bs":
-        sigma_ctrl = _control_sigma(index_params, beta_a, residual_params)
+        sigma_ctrl = _control_sigma(index_params, beta_a, residual_params, damping=grid.damping)
         cv = _make_bs_control(spot_a, r_a, q_a, tau_a, sigma_ctrl)
     elif control != "none":
         msg = f"Unsupported control variate strategy: {control!r}"

@@ -20,19 +20,23 @@ $\alpha = 0.03$, following the MATLAB reference implementation listed in the
 appendix of the preprint DOI:10.1007/s10690-011-9151-7. An uncontrolled FFT
 retains the generic engine default because small damping requires a much wider
 integration grid without the control variate.
+The FFT Black control volatility matches the model characteristic function at
+the chosen contour's zero-frequency point (Joshi and Yang, 2011, section 3.3).
+Quadrature retains the log-variance control for its finite integration range.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Literal, TypeAlias
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
 import numpy as np
 
 from vol_risk.models.numerical.control_variates import make_bs_control
 from vol_risk.models.numerical.fourier.base import QuadCallEngine, QuadEngineParams
 from vol_risk.models.numerical.fourier.fft_np import FFTCallEngine, FFTEngineParams
+from vol_risk.models.vg_control import vg_control_variance
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -44,7 +48,7 @@ VGSI_FFT_DEFAULT_DAMPING = 0.03
 
 EngineName = Literal["auto", "quad", "fft_np"]
 ControlName = Literal["none", "bs"]
-EngineParams: TypeAlias = QuadEngineParams | FFTEngineParams
+EngineParams: TypeAlias = dict[str, Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -325,16 +329,23 @@ def _control_sigma(
     index_params: VGSIParams,
     factor_loading: float,
     residual_params: VGSIParams,
+    *,
+    damping: float = VGSI_FFT_DEFAULT_DAMPING,
 ) -> float:
-    return float(
-        np.sqrt(
-            _vgsi_log_variance(
-                index_params=index_params,
-                factor_loading=factor_loading,
-                residual_params=residual_params,
-            )
-        )
+    """Match the Black control to the compensated VGSI moment at ``1 + damping``."""
+    index_variance = vg_control_variance(
+        factor_loading * index_params.sigma,
+        index_params.nu,
+        factor_loading * index_params.theta,
+        damping,
     )
+    residual_variance = vg_control_variance(
+        residual_params.sigma,
+        residual_params.nu,
+        residual_params.theta,
+        damping,
+    )
+    return float(np.sqrt(index_variance + residual_variance))
 
 
 def _vgsi_call_price(
@@ -348,7 +359,7 @@ def _vgsi_call_price(
     r: float = 0.0,
     q: float = 0.0,
     engine: EngineName = "auto",
-    engine_opt: dict | None = None,
+    engine_opt: EngineParams | None = None,
     control: ControlName = "bs",
 ) -> np.ndarray | float:
     """Price European calls under VGSI via a pluggable NumPy Fourier engine.
@@ -383,15 +394,7 @@ def _vgsi_call_price(
         out = intrinsic if scalar_input else intrinsic.reshape(strike_arr.shape)
         return float(out[0]) if scalar_input else out
 
-    cv = None
-    if control == "bs":
-        sigma_ctrl = _control_sigma(
-            index_params=index_params,
-            factor_loading=factor_loading,
-            residual_params=residual_params,
-        )
-        cv = make_bs_control(spot, r, q, tau, sigma_ctrl, backend="np")
-    elif control != "none":
+    if control not in {"bs", "none"}:
         msg = f"Unsupported control variate strategy: {control!r}"
         raise ValueError(msg)
 
@@ -402,23 +405,38 @@ def _vgsi_call_price(
 
     engine_options = dict(engine_opt or {})
 
-    if engine == "quad":
-        par = QuadEngineParams(**engine_options)
-        engine_obj = QuadCallEngine(cf=cf, control=cv, params=par, disc=disc, tau=tau)
-    elif engine == "fft_np":
-        if control == "bs":
-            engine_options.setdefault("damping", VGSI_FFT_DEFAULT_DAMPING)
-        par = FFTEngineParams(**engine_options)
-        engine_obj = FFTCallEngine(cf=cf, control=cv, params=par, disc=disc)
-    else:
+    if engine not in {"quad", "fft_np"}:
         msg = f"Unsupported engine: {engine!r}"
         raise ValueError(msg)
+    if engine == "fft_np" and control == "bs":
+        engine_options.setdefault("damping", VGSI_FFT_DEFAULT_DAMPING)
+    if (
+        engine == "quad"
+        and np.isposinf(engine_options.get("upper_bound", 512.0))
+        and engine_options.get("oscillation_shift") is None
+    ):
+        drift = np.log(spot) + (r - q + _vgsi_compensator(index_params, factor_loading, residual_params)) * tau
+        engine_options["oscillation_shift"] = float(drift)
+    par = QuadEngineParams(**engine_options) if engine == "quad" else FFTEngineParams(**engine_options)
 
-    damping = engine_obj.params.damping
+    damping = par.damping
     _check_moment(order=damping + 1.0, params=index_params, scale=factor_loading, label="index")
     _check_moment(order=damping + 1.0, params=residual_params, scale=1.0, label="residual")
 
-    prices = engine_obj(strike_1d)
+    cv = None
+    if control == "bs":
+        sigma_ctrl = (
+            _control_sigma(index_params, factor_loading, residual_params, damping=damping)
+            if engine == "fft_np"
+            else float(np.sqrt(_vgsi_log_variance(index_params, factor_loading, residual_params)))
+        )
+        cv = make_bs_control(spot, r, q, tau, sigma_ctrl, backend="np")
+    engine_obj = (
+        QuadCallEngine(cf=cf, control=cv, params=par, disc=disc, tau=tau)
+        if isinstance(par, QuadEngineParams)
+        else FFTCallEngine(cf=cf, control=cv, params=par, disc=disc)
+    )
+    prices = np.asarray(engine_obj(strike_1d), dtype=float)
     return float(prices[0]) if scalar_input else prices.reshape(strike_arr.shape)
 
 
@@ -453,9 +471,11 @@ def vgsi_price(
         engine: Numerical engine; ``"auto"`` picks ``"quad"`` for a single
             strike and ``"fft_np"`` otherwise.
         engine_opt: Optional engine configuration overriding the VGSI
-            defaults. Must match the selected engine's dataclass.
+            defaults. Must match the selected engine's dataclass. For quadrature,
+            ``upper_bound=np.inf`` integrates the full oscillatory Fourier tail.
         control: Control-variate strategy. ``"bs"`` (default) uses a
-            variance-matched Black-Scholes leg (Joshi-Yang, 2011); ``"none"``
+            contour-matched Black-Scholes leg for FFT (Joshi-Yang, 2011)
+            and a log-variance-matched leg for quadrature. ``"none"``
             integrates the model CF directly.
 
     Returns:
