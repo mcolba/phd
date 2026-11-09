@@ -5,15 +5,19 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import KW_ONLY, InitVar, dataclass, field, replace
 from itertools import pairwise
+from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 from scipy.integrate import quad
 
+if TYPE_CHECKING:
+    import jax
+
 ComplexArray = NDArray[np.complex128]
 FloatArray = NDArray[np.float64]
-CharacteristicFunction = Callable[[ComplexArray], ComplexArray]
-CallPriceFunction = Callable[[FloatArray], ArrayLike]
+CharacteristicFunction = Callable[[ComplexArray], "ComplexArray | jax.Array"]
+CallPriceFunction = Callable[[FloatArray], "ArrayLike | jax.Array"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,7 +97,7 @@ def _validate_quad_bounds(upper_bound: float, oscillation_shift: float | None) -
         raise ValueError(msg)
 
 
-def _as_strike_array(strike: ArrayLike) -> tuple[FloatArray, FloatArray, bool]:
+def _as_strike_array(strike: ArrayLike | jax.Array) -> tuple[FloatArray, FloatArray, bool]:
     strike_arr = np.asarray(strike, dtype=float)
     if np.any(~np.isfinite(strike_arr)) or np.any(strike_arr <= 0.0):
         msg = "strike values must be finite and positive."
@@ -101,7 +105,7 @@ def _as_strike_array(strike: ArrayLike) -> tuple[FloatArray, FloatArray, bool]:
     return strike_arr, np.atleast_1d(strike_arr).astype(float, copy=False), strike_arr.ndim == 0
 
 
-def _validate_disc(disc: float) -> float:
+def _validate_disc(disc: float | jax.Array) -> float:
     disc_value = float(disc)
     _validate_positive_finite("disc", disc_value)
     return disc_value
@@ -193,8 +197,8 @@ def _infinite_call_integral(
 
 def _quad_call_price_from_cf(
     cf: CharacteristicFunction,
-    strike: ArrayLike,
-    disc: float,
+    strike: ArrayLike | jax.Array,
+    disc: float | jax.Array,
     damping: float,
     control: CallControlVariate | None = None,
     limit: int = 100,
@@ -248,7 +252,7 @@ class QuadCallEngine:
     """Finite- or infinite-range Carr-Madan quadrature call engine."""
 
     cf: CharacteristicFunction
-    disc: float
+    disc: float | jax.Array
     _: KW_ONLY
     tau: float | None = None
     params: QuadEngineParams = field(default_factory=QuadEngineParams)
@@ -264,7 +268,7 @@ class QuadCallEngine:
 
     def __call__(
         self,
-        strike: ArrayLike,
+        strike: ArrayLike | jax.Array,
     ) -> float | FloatArray:
         return _quad_call_price_from_cf(
             cf=self.cf,
@@ -279,4 +283,3 @@ class QuadCallEngine:
             breakpoints=self.params.breakpoints,
             oscillation_shift=0.0 if self.params.oscillation_shift is None else self.params.oscillation_shift,
         )
-

@@ -1,93 +1,88 @@
-"""Model-agnostic Black-Scholes control-variate builders for Fourier engines.
+"""Black-Scholes control variates for Fourier engines (Joshi & Yang, 2011).
 
-Implements the Joshi & Yang (2011) Black-Scholes control variate: subtract the
-BS characteristic function from a model CF inside the Carr-Madan Fourier
-integral and add the closed-form BS call price back at the end. The caller
-supplies the control volatility, for example by matching characteristic
-functions on the integration contour (Joshi & Yang 2011, section 3.3).
+Shared builders inject NumPy or JAX through the array namespace ``xp``.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, cast
 
+import jax
 import jax.numpy as jnp
 import numpy as np
+from jax.scipy.stats import norm
+from scipy.special import ndtr
 
-from vol_risk.models.black76 import black76_price
-from vol_risk.models.numerical.fourier.base import CallControlVariate
-from vol_risk.models.numerical.fourier.fft_jax import JaxControlVariate
+from vol_risk.models.numerical.fourier.fft import JaxCallControlVariate
+from vol_risk.models.numerical.fourier.quad import CallControlVariate
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from types import ModuleType
+
+    from vol_risk.models.numerical.fourier.fft import JaxCallPriceFunction, JaxCharacteristicFunction
+
+
+Numeric = float | np.ndarray | jax.Array
 
 
 def make_bs_cf(
-    spot: float,
-    r: float,
-    q: float,
-    tau: float,
-    sigma: float,
+    spot: Numeric,
+    r: Numeric,
+    q: Numeric,
+    tau: Numeric,
+    sigma: Numeric,
     *,
-    xp: Any = np,
-) -> Callable[[Any], Any]:
-    r"""Return the Black-Scholes log-stock characteristic function on ``xp``."""
-    drift = float(np.log(spot)) + (r - q - 0.5 * sigma * sigma) * tau
+    xp: ModuleType = np,
+) -> Callable[[Numeric | complex], np.ndarray | jax.Array]:
+    """Return a Black-Scholes log-stock CF using NumPy or traceable JAX operations."""
+    drift = xp.log(spot) + (r - q - 0.5 * sigma * sigma) * tau
     half_var = 0.5 * sigma * sigma * tau
 
-    def cf(u: Any) -> Any:
-        return xp.exp(1j * u * drift - half_var * u * u)
+    def cf(u: Numeric | complex) -> np.ndarray | jax.Array:
+        u = xp.asarray(u)
+        return xp.asarray(xp.exp(1j * u * drift - half_var * u * u))
 
     return cf
 
 
-def make_bs_call_price_np(
-    spot: float, r: float, q: float, tau: float, sigma: float
-) -> Callable[[np.ndarray], np.ndarray]:
-    """Return a NumPy Black-76 call pricer for the BS control leg."""
-    fwd = spot * np.exp((r - q) * tau)
-    disc = float(np.exp(-r * tau))
+def make_bs_call_price(
+    spot: Numeric,
+    r: Numeric,
+    q: Numeric,
+    tau: Numeric,
+    sigma: Numeric,
+    *,
+    xp: ModuleType = np,
+) -> Callable[[Numeric], np.ndarray | jax.Array]:
+    """Return a Black-Scholes call pricer using NumPy/SciPy or traceable JAX operations."""
+    cdf = norm.cdf if xp is jnp else ndtr
 
-    def call_price(strike: np.ndarray) -> np.ndarray:
-        k = np.asarray(strike, dtype=float)
-        return np.asarray(
-            black76_price(fwd=fwd, strike=k, tau=tau, sigma=sigma, disc=disc, is_call=True),
-            dtype=float,
-        ).reshape(k.shape)
+    fwd = spot * xp.exp((r - q) * tau)
+    disc = xp.exp(-r * tau)
+    half_var = 0.5 * sigma * sigma * tau
+    sig_sqrt_t = sigma * xp.sqrt(tau)
 
-    return call_price
-
-
-def make_bs_call_price_jax(spot: float, r: float, q: float, tau: float, sigma: float) -> Callable[[Any], Any]:
-    """Return a JAX Black-Scholes call pricer for the BS control leg."""
-    import jax.numpy as jnp
-    from jax.scipy.stats import norm
-
-    fwd = float(spot * np.exp((r - q) * tau))
-    disc = float(np.exp(-r * tau))
-    sqrt_t = float(np.sqrt(tau))
-    sig_sqrt_t = sigma * sqrt_t
-
-    def call_price(strike: Any) -> Any:
-        k = jnp.asarray(strike)
-        d1 = (jnp.log(fwd / k) + 0.5 * sigma * sigma * tau) / sig_sqrt_t
+    def call_price(strike: Numeric) -> np.ndarray | jax.Array:
+        k = xp.asarray(strike)
+        d1 = (xp.log(fwd / k) + half_var) / sig_sqrt_t
         d2 = d1 - sig_sqrt_t
-        return disc * (fwd * norm.cdf(d1) - k * norm.cdf(d2))
+        return xp.asarray(disc * (fwd * cdf(d1) - k * cdf(d2)))
 
     return call_price
 
 
-def make_bs_control(
-    spot: float, r: float, q: float, tau: float, sigma: float, backend: str = "np"
-) -> CallControlVariate:
-    """Return a NumPy :class:`CallControlVariate` for variance ``sigma``."""
-    xp = np if backend == "np" else jnp
-    call_price = (
-        make_bs_call_price_np(spot, r, q, tau, sigma)
-        if backend == "np"
-        else make_bs_call_price_jax(spot, r, q, tau, sigma)
-    )
+def make_bs_control_np(spot: Numeric, r: Numeric, q: Numeric, tau: Numeric, sigma: Numeric) -> CallControlVariate:
+    """Return a NumPy :class:`CallControlVariate` for volatility ``sigma``."""
     return CallControlVariate(
-        cf=make_bs_cf(spot, r, q, tau, sigma, xp=xp),
-        call_price=call_price,
+        cf=make_bs_cf(spot, r, q, tau, sigma),
+        call_price=make_bs_call_price(spot, r, q, tau, sigma),
+    )
+
+
+def make_bs_control_jax(spot: Numeric, r: Numeric, q: Numeric, tau: Numeric, sigma: Numeric) -> JaxCallControlVariate:
+    """Return a traceable :class:`JaxCallControlVariate` for volatility ``sigma``."""
+    return JaxCallControlVariate(
+        cf=cast("JaxCharacteristicFunction", make_bs_cf(spot, r, q, tau, sigma, xp=jnp)),
+        call_price=cast("JaxCallPriceFunction", make_bs_call_price(spot, r, q, tau, sigma, xp=jnp)),
     )
