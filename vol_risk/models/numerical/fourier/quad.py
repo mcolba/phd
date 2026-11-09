@@ -14,18 +14,12 @@ from scipy.integrate import quad
 if TYPE_CHECKING:
     import jax
 
+    from vol_risk.models.numerical.control_variates import CallControlVariate
+
 ComplexArray = NDArray[np.complex128]
 FloatArray = NDArray[np.float64]
 CharacteristicFunction = Callable[[ComplexArray], "ComplexArray | jax.Array"]
 CallPriceFunction = Callable[[FloatArray], "ArrayLike | jax.Array"]
-
-
-@dataclass(frozen=True, slots=True)
-class CallControlVariate:
-    """Control variate for a discounted Fourier call engine."""
-
-    cf: CharacteristicFunction
-    call_price: CallPriceFunction
 
 
 @dataclass(frozen=True, slots=True)

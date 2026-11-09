@@ -1,10 +1,12 @@
 """Black-Scholes control variates for Fourier engines (Joshi & Yang, 2011).
 
-Shared builders inject NumPy or JAX through the array namespace ``xp``.
+Defines the control-variate contracts consumed by the quadrature and FFT engines and
+shared builders that inject NumPy or JAX through the array namespace ``xp``.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 import jax
@@ -13,17 +15,36 @@ import numpy as np
 from jax.scipy.stats import norm
 from scipy.special import ndtr
 
-from vol_risk.models.numerical.fourier.fft import JaxCallControlVariate
-from vol_risk.models.numerical.fourier.quad import CallControlVariate
-
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import ModuleType
 
     from vol_risk.models.numerical.fourier.fft import JaxCallPriceFunction, JaxCharacteristicFunction
+    from vol_risk.models.numerical.fourier.quad import CallPriceFunction, CharacteristicFunction
 
 
 Numeric = float | np.ndarray | jax.Array
+
+
+@dataclass(frozen=True, slots=True)
+class CallControlVariate:
+    """Control variate for a discounted Fourier call engine.
+
+    ``cf`` and ``call_price`` must share spot, rates and maturity with the model being
+    priced: equal forwards cancel the Carr-Madan pole at ``v = i*damping``, which is what
+    makes small damping usable.
+    """
+
+    cf: CharacteristicFunction
+    call_price: CallPriceFunction
+
+
+@dataclass(frozen=True, slots=True)
+class JaxCallControlVariate:
+    """JAX control variate for a discounted Fourier call engine; see :class:`CallControlVariate`."""
+
+    cf: JaxCharacteristicFunction
+    call_price: JaxCallPriceFunction
 
 
 def make_bs_cf(
